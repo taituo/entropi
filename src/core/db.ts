@@ -81,6 +81,12 @@ CREATE TABLE outbox (
   created_at INTEGER NOT NULL, done_at INTEGER, UNIQUE (realm_id, message_id, agent_id));
 CREATE INDEX outbox_pending ON outbox(status, id);
 `,
+	// Attachments: metadata only. The bytes live outside the database; visibility follows the space.
+	`
+CREATE TABLE attachments (
+  realm_id TEXT NOT NULL, id TEXT NOT NULL, space_id TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
+  owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (realm_id, space_id, id));
+`,
 ];
 
 export function openDb(path: string): DatabaseSync {

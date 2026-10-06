@@ -166,3 +166,5 @@ export type OutboxItem = {
 	from: Id;
 	attempts: number;
 };
+
+export type Attachment = { realmId: Id; id: Id; spaceId: Id; name: string; mime: string; size: number; ownerId: Id; createdAt: number };

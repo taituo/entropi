@@ -7,6 +7,7 @@ import type { Config } from "../config.ts";
 import { api, ensureMember, eventView, json, statusOf } from "./api.ts";
 import { createAuth } from "./auth.ts";
 import { Hub } from "./sse.ts";
+import { createUploads } from "./uploads.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = resolve(here, "..", "..", "public");
@@ -34,7 +35,7 @@ export function createApp(o: { core: Core; config: Config }): App {
 	const { core, config } = o;
 	const auth = createAuth(config);
 	const hub = new Hub(core, (e) => eventView(core, e));
-	const deps = { core, hub, config };
+	const deps = { core, hub, uploads: createUploads(join(config.dataDir, "uploads")), config };
 
 	const server = createServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", config.publicUrl);

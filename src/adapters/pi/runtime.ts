@@ -34,6 +34,8 @@ export type PiRuntimeOptions = {
 	/** "provider/model" used to write OptChat summaries; extractive summaries without it. */
 	summarizerModel?: ModelRef;
 	settings?: Record<string, unknown>;
+	/** Reads uploaded image bytes by id. Without it images cannot be forwarded (the people are told). */
+	images?: { read(id: string, mime: string): Promise<Buffer> };
 };
 
 /**
@@ -205,31 +207,39 @@ export class PiRuntime implements AgentDispatcher {
 		await this.syncAgent(conv, loc);
 		const sender = core.getActor(o.realmId, o.from)?.name ?? o.from;
 		const space = core.getSpace(o.realmId, o.spaceId)!;
-		let header = `[${space.kind === "dm" ? "private chat" : `#${space.id}`}] ${core.getActor(o.realmId, o.from)?.kind === "agent" ? `@${handleOf(o.from)} (agent)` : sender}: ${o.text}`;
-		header += this.imageNote(o, conv, loc);
+		const header = `[${space.kind === "dm" ? "private chat" : `#${space.id}`}] ${core.getActor(o.realmId, o.from)?.kind === "agent" ? `@${handleOf(o.from)} (agent)` : sender}: ${o.text}`;
+		const content = await this.contentFor(o, header, loc);
 		// 2. Exactly-once on Pi's side: the same requestId always returns the same submission.
-		const sub = await conv.submit({ type: "input", content: header, requestId }, ctx);
+		const sub = await conv.submit({ type: "input", content, requestId }, ctx);
 		failpoint("dispatch:after-submit");
 		this.track(reply, sub.id);
 	}
 
 	/**
-	 * Images are never dropped silently. A model that cannot see images is told so (and the people are told too, once), and
-	 * this server does not forward image bytes yet, so for a vision model the note says that instead.
+	 * What the model receives. Images are never dropped silently: a vision model gets the pixels (as data: URIs, which is
+	 * all a gateway accepts), a text-only model gets a plain statement that it cannot see them, and the people get a notice.
 	 */
-	private imageNote(o: { realmId: Id; spaceId: Id; agentId: Id; messageId: number }, _conv: Conversation, loc: Loc): string {
-		const msg = this.core.getMessage(o.realmId, o.messageId);
-		const imgs = (msg?.meta.images as { name?: string }[] | undefined) ?? [];
-		if (!imgs.length) return "";
+	private async contentFor(o: { realmId: Id; spaceId: Id; agentId: Id; messageId: number }, header: string, loc: Loc): Promise<any> {
+		const imgs = (this.core.getMessage(o.realmId, o.messageId)?.meta.images as { id?: string; name?: string; mime?: string }[] | undefined) ?? [];
+		if (!imgs.length) return header;
 		const ref = this.modelFor(loc);
 		const canSee = !!this.opts.inference.models.getModel(ref.provider, ref.modelId)?.input?.includes("image");
 		const names = imgs.map((i) => i.name ?? "image").join(", ");
-		const why = canSee ? "this server does not forward image data to agents yet" : `the model ${ref.provider}/${ref.modelId} does not support images`;
-		this.core.postMessage(o.realmId, o.spaceId, "system", {
-			kind: "notice", requestId: `noimg:${o.messageId}:${o.agentId}`,
-			text: `${imgs.length} image attachment(s) (${names}) were NOT sent to ${handleOf(o.agentId)}: ${why}. Describe the key details in text instead.`,
-		});
-		return `\n\n[${imgs.length} image attachment(s) (${names}) were shared, but you cannot see them (${why}). Say so briefly and ask for the key details as text instead of guessing.]`;
+		const refuse = (why: string) => {
+			this.core.postMessage(o.realmId, o.spaceId, "system", {
+				kind: "notice", requestId: `noimg:${o.messageId}:${o.agentId}`,
+				text: `${imgs.length} image attachment(s) (${names}) were NOT sent to ${handleOf(o.agentId)}: ${why}. Describe the key details in text instead.`,
+			});
+			return `${header}\n\n[${imgs.length} image attachment(s) (${names}) were shared, but you cannot see them (${why}). Say so briefly and ask for the key details as text instead of guessing.]`;
+		};
+		if (!canSee) return refuse(`the model ${ref.provider}/${ref.modelId} does not support images`);
+		if (!this.opts.images) return refuse("this server has no image store configured");
+		const blocks: any[] = [{ type: "text", text: header }];
+		for (const i of imgs) {
+			if (!i.id || !i.mime) continue;
+			blocks.push({ type: "image", data: (await this.opts.images.read(i.id, i.mime)).toString("base64"), mimeType: i.mime });
+		}
+		return blocks;
 	}
 
 	/** Wait for a submission to settle, then make the core's message a pure function of the transcript. */
@@ -264,16 +274,22 @@ export class PiRuntime implements AgentDispatcher {
 		const pi = cur.meta.pi as { thread: string };
 		let body = "";
 		let activity: Step[] = [];
+		let failures: { entry: number; stopReason: string; error: string }[] = [];
 		if (rec.status === "done") {
 			const entries = await this.entriesBetween(pi.thread, Number(rec.entry), Number(rec.answer));
-			({ text: body, activity } = project(entries));
+			const p = project(entries);
+			({ text: body, activity } = p);
+			failures = p.failures;
 		} else if (rec.status === "unanswered") {
 			const entries = rec.entry ? await this.entriesBetween(pi.thread, Number(rec.entry), Number.MAX_SAFE_INTEGER) : [];
 			const p = project(entries);
-			body = `${p.text}${p.text ? "\n\n" : ""}⚠ No answer: ${rec.reason}`;
+			const failure = failureText(rec.reason, entries);
+			body = `${p.text}${p.text ? "\n\n" : ""}${failure}`;
 			activity = p.activity;
+			failures = p.failures;
 		} else return;
-		const done = core.updateMessage(cur.realmId, messageId, cur.authorId, { text: body || "(no answer)", meta: { ...cur.meta, activity }, status: "done" });
+		const done = core.updateMessage(cur.realmId, messageId, cur.authorId, { text: body || "(no answer)", meta: { ...cur.meta, activity, ...(failures.length ? { failures } : {}) }, status: "done" });
+		for (const f of failures) console.warn(`[pi] failed generation attempt in ${pi.thread} (entry ${f.entry}, ${f.stopReason}): ${f.error || "no error message"}`);
 		this.opts.live?.(done);
 		await this.memory.sync(pi.thread, new PiTranscript(this.storage, ctx), () => this.builder.onLeaf(pi.thread)).catch((e) => console.warn("memory sync failed", e));
 		this.builder.backfill(pi.thread);
@@ -417,7 +433,7 @@ export class PiRuntime implements AgentDispatcher {
 	}
 
 	private setupSummarizer() {
-		const ref = this.opts.summarizerModel ?? this.opts.inference.resolve("");
+		const ref = this.opts.summarizerModel ?? this.opts.inference.summarizer();
 		if (!ref) return; // extractive summaries only
 		const models: Models = this.opts.inference.models;
 		this.builder.summarize = async (texts) => {
@@ -433,8 +449,9 @@ export class PiRuntime implements AgentDispatcher {
 type LiveState = { current: Message | undefined; text: Map<number, string>; final: string; activity: Step[]; timer: NodeJS.Timeout | undefined };
 
 /** The text and tool activity of a run, as a pure function of its transcript entries. */
-export function project(entries: readonly EntryRecord[]): { text: string; activity: Step[] } {
+export function project(entries: readonly EntryRecord[]): { text: string; activity: Step[]; failures: { entry: number; stopReason: string; error: string }[] } {
 	const texts: string[] = [];
+	const failures: { entry: number; stopReason: string; error: string }[] = [];
 	const steps = new Map<string, Step>();
 	for (const e of entries) {
 		const msg: any = e.model?.[0];
@@ -442,7 +459,7 @@ export function project(entries: readonly EntryRecord[]): { text: string; activi
 		if (e.kind === "pi.assistant") {
 			// A generation that was interrupted (process killed mid-stream) or failed is kept by Pi as an `aborted`/`error`
 			// entry and then retried. Its partial text is not part of the answer.
-			if (msg.stopReason === "aborted" || msg.stopReason === "error") continue;
+			if (msg.stopReason === "aborted" || msg.stopReason === "error") { failures.push({ entry: Number(e.id), stopReason: msg.stopReason, error: String(msg.errorMessage ?? "").slice(0, 300) }); continue; }
 			const t = textOf(msg.content).trim();
 			if (t) texts.push(t);
 			for (const b of msg.content ?? []) if (b.type === "toolCall") steps.set(b.id, { id: b.id, name: b.name, args: short(b.arguments, 220), status: "running" });
@@ -451,5 +468,16 @@ export function project(entries: readonly EntryRecord[]): { text: string; activi
 			if (s) { s.status = msg.isError ? "error" : "done"; s.preview = short(textOf(msg.content), 500); }
 		}
 	}
-	return { text: texts.join("\n\n"), activity: [...steps.values()] };
+	return { text: texts.join("\n\n"), activity: [...steps.values()], failures };
+}
+
+/** Say plainly why there is no answer. A full quota is the common case with metered or shared gateways. */
+export function failureText(reason: string, entries: readonly EntryRecord[]): string {
+	const err = [...entries].reverse().map((e: any) => e.model?.[0]).find((m: any) => m?.role === "assistant" && m.errorMessage)?.errorMessage as string | undefined;
+	const raw = `${err ?? ""} ${reason}`;
+	if (/quota|rate.?limit|429|too many requests|insufficient|exceeded|capacity|credit|billing/i.test(raw))
+		return `⚠ The model could not answer: its quota or rate limit is used up (${(err ?? reason).slice(0, 160)}). Nothing was lost. Send the message again later, or ask an admin to pick another model for this agent.`;
+	if (/ECONNREFUSED|ENOTFOUND|fetch failed|network|timeout|timed out|unreachable/i.test(raw))
+		return `⚠ The model endpoint could not be reached (${(err ?? reason).slice(0, 160)}). Nothing was lost. Send the message again when it is back.`;
+	return `⚠ No answer: ${reason}${err ? ` (${err.slice(0, 200)})` : ""}. Nothing was lost; try again.`;
 }

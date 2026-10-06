@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { conflict, forbidden, invalid, notFound } from "./errors.ts";
 import type {
-	Actor, ActorKind, AttentionItem, AttentionKind, DecisionRequest, ExternalRef, Focus, Id, Message, MessageKind, Presence, PresenceState,
+	Actor, ActorKind, Attachment, AttentionItem, AttentionKind, DecisionRequest, ExternalRef, Focus, Id, Message, MessageKind, Presence, PresenceState,
 	OutboxItem, Realm, RealmKind, RealmPolicy, Space, SpaceKind, WorkItem, WorkState, ActivityEvent,
 } from "./types.ts";
 
@@ -562,6 +562,32 @@ export class Core {
 		this.emit(realmId, "message.updated", d.decidedBy ?? SYSTEM, "message", String(m.id), { spaceId: m.spaceId });
 	}
 
+
+	// ------------------------------------------------------------------ attachments
+
+	/** Register an uploaded file (stored elsewhere) against a space. Same bytes uploaded twice to one space is one attachment. */
+	addAttachment(realmId: Id, spaceId: Id, by: Id, o: { id: Id; name: string; mime: string; size: number }): Attachment {
+		return this.tx(() => {
+			this.actor(realmId, by);
+			if (!this.canPost(realmId, by, spaceId)) throw forbidden("you cannot post here");
+			this.db.prepare("INSERT OR IGNORE INTO attachments (realm_id, id, space_id, name, mime, size, owner_id, created_at) VALUES (?,?,?,?,?,?,?,?)").run(realmId, o.id, spaceId, o.name.slice(0, 120), o.mime, o.size, by, this.now());
+			return this.getAttachment(realmId, spaceId, o.id, by)!;
+		});
+	}
+
+	/** Visible only to people who can see the space the file was shared in. */
+	getAttachment(realmId: Id, spaceId: Id, id: Id, forActor: Id): Attachment | undefined {
+		if (!this.canSee(realmId, forActor, spaceId)) return undefined;
+		const r = this.db.prepare("SELECT * FROM attachments WHERE realm_id = ? AND space_id = ? AND id = ?").get(realmId, spaceId, id) as Row | undefined;
+		return r ? { realmId, id: r.id, spaceId, name: r.name, mime: r.mime, size: r.size, ownerId: r.owner_id, createdAt: r.created_at } : undefined;
+	}
+
+	/** Resolve a file id from any space the viewer may see (for the plain /files/:id URL). */
+	findAttachment(realmId: Id, id: Id, forActor: Id): Attachment | undefined {
+		const rows = this.db.prepare("SELECT space_id FROM attachments WHERE realm_id = ? AND id = ?").all(realmId, id) as Row[];
+		for (const r of rows) { const a = this.getAttachment(realmId, r.space_id, id, forActor); if (a) return a; }
+		return undefined;
+	}
 
 	// ------------------------------------------------------------------ outbox
 

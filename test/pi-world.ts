@@ -29,7 +29,7 @@ const userText = (ctx: any) => {
  *   anything else   -> answers "echo: <text>"
  */
 export function scriptedModel() {
-	const faux = fauxProvider({ provider: "faux", models: [{ id: "scripted" }] } as any);
+	const faux = fauxProvider({ provider: "faux", models: [{ id: "scripted", input: ["text"] }] } as any);
 	const step = async (ctx: any) => {
 		faux.appendResponses([step]); // a pure function of the transcript: always ready for the next call
 		const text = userText(ctx);

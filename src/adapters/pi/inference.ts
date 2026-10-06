@@ -13,13 +13,21 @@ export type ModelRef = { provider: string; modelId: string };
  */
 export type InferenceConfig = {
 	airgapped: boolean;
-	local?: { baseUrl: string; model: string; apiKey: string; vision: boolean };
+	local?: {
+		baseUrl: string; model: string; apiKey: string;
+		/** true: every local model accepts images. Otherwise only those named in `visionModels`. */
+		vision: boolean; visionModels: string[];
+		/** More model ids the gateway serves, so they can be chosen per agent (LOCAL_LLM_MODELS=a,b,c). */
+		extraModels: string[];
+	};
 	openaiKey?: string;
 	openrouterKey?: string;
 	/** "provider/model" for agents without their own override. Defaults to the local model when one is configured. */
 	defaultModel?: string;
 	/** "provider/model" per agent handle (AGENT_OPS_MODEL=...). */
 	perAgent: Record<string, string>;
+	/** "provider/model" for routine background work (OptChat summaries): a cheap model. Defaults to the default model. */
+	summarizerModel?: string;
 };
 
 export function inferenceFromEnv(env: NodeJS.ProcessEnv): InferenceConfig {
@@ -32,15 +40,20 @@ export function inferenceFromEnv(env: NodeJS.ProcessEnv): InferenceConfig {
 	const baseUrl = t(env.LOCAL_LLM_BASE_URL), model = t(env.LOCAL_LLM_MODEL);
 	return {
 		airgapped: env.AIRGAPPED === "true",
-		local: baseUrl && model ? { baseUrl, model, apiKey: t(env.LOCAL_LLM_API_KEY) ?? "not-needed", vision: env.LOCAL_LLM_VISION === "true" } : undefined,
+		local: baseUrl && model ? {
+			baseUrl, model, apiKey: t(env.LOCAL_LLM_API_KEY) ?? "not-needed", vision: env.LOCAL_LLM_VISION === "true",
+			visionModels: list(env.LOCAL_LLM_VISION_MODELS), extraModels: list(env.LOCAL_LLM_MODELS),
+		} : undefined,
 		openaiKey: t(env.OPENAI_API_KEY),
 		openrouterKey: t(env.OPENROUTER_API_KEY),
 		defaultModel: t(env.INFERENCE_DEFAULT),
 		perAgent,
+		summarizerModel: t(env.OPTCHAT_MODEL),
 	};
 }
+const list = (v: string | undefined) => (v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 
-export type Inference = { models: Models; providers: string[]; resolve(agentHandle: string): ModelRef | undefined };
+export type Inference = { models: Models; providers: string[]; resolve(agentHandle: string): ModelRef | undefined; summarizer(): ModelRef | undefined };
 
 const parseRef = (s: string): ModelRef => {
 	const i = s.indexOf("/");
@@ -52,13 +65,23 @@ const parseRef = (s: string): ModelRef => {
 export function buildInference(cfg: InferenceConfig, extra: { id: string; provider: any }[] = []): Inference {
 	const models = createModels();
 	const providers: string[] = [];
+	const fallback = cfg.defaultModel ?? (cfg.local ? `local/${cfg.local.model}` : undefined);
+	const refs = [...Object.values(cfg.perAgent), ...(fallback ? [fallback] : []), ...(cfg.summarizerModel ? [cfg.summarizerModel] : [])];
 	if (cfg.local) {
 		const l = cfg.local;
+		// Every local model that will be used must be registered: the default, the per-agent ones, the summariser, extras.
+		const ids = [...new Set([l.model, ...l.extraModels, ...refs.filter((r) => r.startsWith("local/")).map((r) => parseRef(r).modelId)])];
 		models.setProvider(createProvider({
 			id: "local", name: "Local OpenAI-compatible", baseUrl: l.baseUrl,
 			// vLLM and Ollama ignore the key, but the OpenAI client refuses to send a request without one.
 			auth: { apiKey: { name: "Local LLM", resolve: async () => ({ auth: { apiKey: l.apiKey } }) } },
-			models: [{ id: l.model, name: l.model, api: "openai-completions", provider: "local", baseUrl: l.baseUrl, reasoning: false, input: l.vision ? ["text", "image"] : ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 16000 }],
+			models: ids.map((id) => ({
+				id, name: id, api: "openai-completions", provider: "local", baseUrl: l.baseUrl, reasoning: false,
+				input: l.vision || l.visionModels.includes(id) ? ["text", "image"] : ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 16000,
+				// Each conversation has a stable id: send it as x-session-id so a gateway can spread load across accounts and keep prompt caches warm.
+				compat: { sendSessionAffinityHeaders: true, sessionAffinityFormat: "openrouter" },
+			})),
 			api: openAICompletionsApi(),
 		}) as any);
 		providers.push("local");
@@ -69,8 +92,6 @@ export function buildInference(cfg: InferenceConfig, extra: { id: string; provid
 	}
 	for (const x of extra) { models.setProvider(x.provider); providers.push(x.id); }
 
-	const fallback = cfg.defaultModel ?? (cfg.local ? `local/${cfg.local.model}` : undefined);
-	const refs = [...Object.values(cfg.perAgent), ...(fallback ? [fallback] : [])];
 	for (const r of refs) {
 		const { provider } = parseRef(r);
 		if (!providers.includes(provider)) {
@@ -84,5 +105,6 @@ export function buildInference(cfg: InferenceConfig, extra: { id: string; provid
 			const ref = cfg.perAgent[handle] ?? fallback;
 			return ref ? parseRef(ref) : undefined;
 		},
+		summarizer: () => { const r = cfg.summarizerModel ?? fallback; return r ? parseRef(r) : undefined; },
 	};
 }

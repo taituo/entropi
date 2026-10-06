@@ -5,6 +5,7 @@ import { CoreError } from "../core/errors.ts";
 import type { ActivityEvent, Actor, Id, Message, Space } from "../core/types.ts";
 import type { Config } from "../config.ts";
 import type { Hub } from "./sse.ts";
+import { MAX_IMAGE, MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_BYTES_PER_MESSAGE, type Uploads } from "./uploads.ts";
 import type { User } from "./auth.ts";
 
 export const httpError = (status: number, message: string) => Object.assign(new Error(message), { status });
@@ -27,6 +28,18 @@ export async function readBody(req: IncomingMessage, max = 64_000): Promise<any>
 	} catch {
 		throw httpError(400, "invalid JSON");
 	}
+}
+
+async function readRaw(req: IncomingMessage, max: number): Promise<Buffer> {
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const c of req) {
+		size += c.length;
+		if (size <= max) chunks.push(c);
+		else if (size > max * 4) { req.destroy(); break; } // drain a bounded amount so the client can read our 413
+	}
+	if (size > max) throw httpError(413, `file too large (max ${Math.round(max / 1048576)} MB)`);
+	return Buffer.concat(chunks);
 }
 
 /** `human:<sub>` : the stable identity of a signed-in person. Names are snapshots, never identity. */
@@ -61,7 +74,7 @@ export function eventView(core: Core, e: ActivityEvent): { type: string; payload
 	return { type: "event", payload: e };
 }
 
-export type Deps = { core: Core; hub: Hub; config: Pick<Config, "brand" | "defaultRealm"> };
+export type Deps = { core: Core; hub: Hub; uploads: Uploads; config: Pick<Config, "brand" | "defaultRealm"> };
 
 /** All routes live under /api/realms/:realm; a person who is not a member gets 404, never 403. */
 export async function api(req: IncomingMessage, res: ServerResponse, url: URL, user: User, d: Deps) {
@@ -99,12 +112,39 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 
 	if (m === "GET" && rest === "/focus") return json(res, 200, { focus: core.focus(realmId, me.id) });
 
+	if (m === "POST" && (r = /^\/spaces\/([\w-]+)\/upload$/.exec(rest))) {
+		if (!core.canPost(realmId, me.id, r[1])) throw httpError(core.canSee(realmId, me.id, r[1]) ? 403 : 404, core.canSee(realmId, me.id, r[1]) ? "you cannot post here" : "no such space");
+		const bytes = await readRaw(req, MAX_IMAGE);
+		try {
+			const saved = await d.uploads.save(bytes);
+			const name = (url.searchParams.get("name") ?? "image").replace(/[^\w.\- ]/g, "_").slice(0, 80) || "image";
+			const att = core.addAttachment(realmId, r[1], me.id, { id: saved.id, name, mime: saved.mime, size: saved.size });
+			return json(res, 200, { attachment: { id: att.id, name: att.name, mime: att.mime, size: att.size } });
+		} catch (e: any) {
+			if (e instanceof CoreError) throw e;
+			throw httpError(415, e.message);
+		}
+	}
+
+	if (m === "GET" && (r = /^\/files\/([a-f0-9]{32})$/.exec(rest))) {
+		const att = core.findAttachment(realmId, r[1], me.id);
+		if (!att) throw httpError(404, "not found");
+		const data = await d.uploads.read(att.id, att.mime);
+		res.writeHead(200, { "content-type": att.mime, "content-length": data.length, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" }).end(data);
+		return;
+	}
+
 	if (m === "GET" && (r = /^\/spaces\/([\w-]+)\/messages$/.exec(rest))) return json(res, 200, { messages: core.listMessages(realmId, r[1], me.id) });
 
 	if (m === "POST" && (r = /^\/spaces\/([\w-]+)\/messages$/.exec(rest))) {
 		const spaceId = r[1];
 		const body = await readBody(req);
-		const text = String(body.text ?? "").trim();
+		const ids: string[] = Array.isArray(body.attachments) ? body.attachments.map(String) : [];
+		if (ids.length > MAX_IMAGES_PER_MESSAGE) throw httpError(400, `at most ${MAX_IMAGES_PER_MESSAGE} images per message`);
+		const atts = ids.map((id) => core.getAttachment(realmId, spaceId, id, me.id));
+		if (atts.some((a) => !a || a.ownerId !== me.id)) throw httpError(400, "unknown attachment");
+		if (atts.reduce((n, a) => n + a!.size, 0) > MAX_IMAGE_BYTES_PER_MESSAGE) throw httpError(413, "images in one message are limited to 10 MB in total");
+		const text = String(body.text ?? "").trim() || (atts.length ? "(image)" : "");
 		if (!text || text.length > 4000) throw httpError(400, "message must be 1-4000 characters");
 		const space = core.getSpace(realmId, spaceId);
 		if (!space || !core.canSee(realmId, me.id, spaceId)) throw httpError(404, "no such space");
@@ -112,7 +152,7 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 		// message (outbox), so a crash cannot lose it.
 		const { present, absent } = core.mentions(realmId, spaceId, text);
 		const targets = space.kind === "dm" ? space.agentIds : present;
-		const { message } = core.postMessage(realmId, spaceId, me.id, { text, dispatchTo: targets });
+		const { message } = core.postMessage(realmId, spaceId, me.id, { text, dispatchTo: targets, meta: atts.length ? { images: atts.map((a) => ({ id: a!.id, name: a!.name, mime: a!.mime, size: a!.size })) } : {} });
 		for (const id of absent) core.postMessage(realmId, spaceId, "system", { kind: "notice", text: `${handleOf(id)} is not in #${space.id}. Agents here: ${space.agentIds.map(handleOf).join(", ")}.` });
 		return json(res, 200, { message, dispatchedTo: targets });
 	}

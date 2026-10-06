@@ -8,6 +8,7 @@ import { buildInference, inferenceFromEnv } from "./adapters/pi/inference.ts";
 import { PiRuntime } from "./adapters/pi/runtime.ts";
 import { createApp } from "./http/app.ts";
 import { DispatchPump } from "./runtime/pump.ts";
+import { createUploads } from "./http/uploads.ts";
 import { seedRealm } from "./seed.ts";
 
 const core = new Core(openDb(join(config.dataDir, "entropi.sqlite")));
@@ -22,7 +23,7 @@ const inference = buildInference(inferenceCfg);
 let runtime: PiRuntime | undefined;
 let dispatcher;
 if (inference.providers.length) {
-	runtime = new PiRuntime({ core, storage: await openNodeSqliteStorage(join(config.dataDir, "pi.sqlite")), inference, live });
+	runtime = new PiRuntime({ core, storage: await openNodeSqliteStorage(join(config.dataDir, "pi.sqlite")), inference, live, images: createUploads(join(config.dataDir, "uploads")) });
 	await runtime.start();
 	dispatcher = runtime;
 	console.log(`agents: Pi Durable, providers=${inference.providers.join(",")}${inferenceCfg.airgapped ? " (airgapped)" : ""}`);

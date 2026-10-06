@@ -146,3 +146,34 @@ test("focus over HTTP is the person's own small view", async () => {
 	assert.equal((await call(alice, "GET", "/api/realms/main/focus")).body.focus.needsYou.length, 1);
 	assert.equal((await call(bob, "GET", "/api/realms/main/focus")).body.focus.needsYou.length, 0);
 });
+
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+const upload = (cookie: string, space: string, bytes: Buffer, name = "dot.png") =>
+	fetch(`${base}/api/realms/main/spaces/${space}/upload?name=${name}`, { method: "POST", headers: { cookie, "x-requested-with": "entropi", "content-type": "application/octet-stream" }, body: new Uint8Array(bytes) });
+
+test("images: only real images, size limits, visibility follows the space, and the message carries them", async () => {
+	const r = await upload(alice, "general", PNG);
+	assert.equal(r.status, 200);
+	const att = ((await r.json()) as any).attachment;
+	assert.equal(att.mime, "image/png");
+	assert.equal((await upload(alice, "general", Buffer.from("not an image at all"))).status, 415);
+	assert.equal((await upload(carol, "general", PNG)).status, 403, "viewers cannot post, so cannot upload");
+	assert.equal((await upload(alice, "general", Buffer.concat([PNG, Buffer.alloc(5 * 1024 * 1024)]))).status, 413);
+
+	const posted = await call(alice, "POST", "/api/realms/main/spaces/general/messages", { text: "see this", attachments: [att.id] });
+	assert.equal(posted.status, 200);
+	assert.deepEqual(posted.body.message.meta.images.map((i: any) => i.id), [att.id]);
+	assert.equal((await call(alice, "POST", "/api/realms/main/spaces/general/messages", { text: "x", attachments: ["0".repeat(32)] })).status, 400);
+	assert.equal((await call(bob, "POST", "/api/realms/main/spaces/general/messages", { text: "stolen", attachments: [att.id] })).status, 400, "someone else's upload cannot be attached");
+	const file = await fetch(`${base}/api/realms/main/files/${att.id}`, { headers: { cookie: carol } });
+	assert.equal(file.status, 200);
+	assert.equal(file.headers.get("content-type"), "image/png");
+});
+
+test("an image shared in a private chat is invisible to everybody else", async () => {
+	const dm = await call(alice, "POST", "/api/realms/main/dms", { agent: "ops" });
+	const att = ((await (await upload(alice, dm.body.space.id, Buffer.concat([PNG, Buffer.from("dm-only")]), "secret.png")).json()) as any).attachment;
+	assert.equal((await fetch(`${base}/api/realms/main/files/${att.id}`, { headers: { cookie: alice } })).status, 200);
+	assert.equal((await fetch(`${base}/api/realms/main/files/${att.id}`, { headers: { cookie: bob } })).status, 404);
+	assert.equal((await upload(bob, dm.body.space.id, PNG)).status, 404);
+});
