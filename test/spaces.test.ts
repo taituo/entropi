@@ -140,7 +140,7 @@ test("outbox: a message and its wake-ups are committed together, pending until a
 	core.markOutbox(first.id, "sent");
 	assert.equal(core.pendingOutbox().length, 1);
 	assert.equal(core.bumpOutbox(core.pendingOutbox()[0].id, "boom"), 1);
-	assert.equal(code(() => core.postMessage("payments", "general", "human:anna", { text: "x", dispatchTo: ["agent:ghost"] })), "forbidden");
+	assert.equal(code(() => core.postMessage("payments", "general", "human:anna", { text: "x", dispatchTo: ["agent:ghost"] })), "invalid");
 	assert.equal(code(() => core.postMessage("payments", "general", "agent:ops", { text: "x", dispatchTo: ["agent:ops"] })), "invalid", "an agent cannot wake itself");
 });
 
