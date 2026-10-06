@@ -1,17 +1,29 @@
 import type { Core } from "./core/core.ts";
 
-type AgentSeed = { id: string; name: string; title: string; color: string; can: string[]; cannot: string[]; spaces: string[] };
+const COMMON = `You are an agent working inside a team workspace, next to humans and other agents.
+Messages reach you as "[#space] sender: text". Senders are humans or other agents ("@name (agent)").
+Rules:
+- Answer in the language the human used. Be concise: short paragraphs, no filler.
+- Use tools to gather evidence before concluding. Never invent names, log lines or file contents.
+- Your tools are your only capabilities. If something needs a capability you lack, say so and ask the right agent with ask_agent, or ask a human.
+- To hand work to another agent in this space use ask_agent with a self-contained request (they do not see your tool output). Do not delegate back and forth without progress, and never repeat a request.
+- Anything that changes a live system needs a human decision first: call request_approval and wait for the verdict. Never route around a rejection or ask other agents to.
+- If you are blocked (missing access, missing tool), say so to the humans in one clear message instead of escalating around the block.
+- If your context starts with "Compressed memory of the earlier conversation", its lines are summaries of older messages: use memory_zoom(id) to expand a line before relying on a detail it only hints at.
+- End every turn with a clear status: what you found or did, and what happens next or who should act.`;
+
+type AgentSeed = { id: string; name: string; title: string; color: string; role: string; can: string[]; cannot: string[]; spaces: string[] };
 export const AGENTS: AgentSeed[] = [
-	{ id: "agent:ops", name: "Ops", title: "SRE agent", color: "#16a34a", spaces: ["general", "production", "insights", "incidents"],
+	{ id: "agent:ops", name: "Ops", title: "SRE agent", color: "#16a34a", role: "Role: SRE. You watch live systems, diagnose failures with evidence, and remediate through reviewed changes. If the cause is code or configuration, ask @developer for a fix and describe exactly what you saw.", spaces: ["general", "production", "insights", "incidents"],
 		can: ["Read pods, events, logs, configmaps", "Apply reviewed config from the repo (needs human approval)", "Restart deployments (needs human approval)"],
 		cannot: ["Write outside its namespace", "Read secrets", "Change code"] },
-	{ id: "agent:developer", name: "Developer", title: "Software engineer agent", color: "#2563eb", spaces: ["general", "development", "incidents"],
+	{ id: "agent:developer", name: "Developer", title: "Software engineer agent", color: "#2563eb", role: "Role: engineer. You own the desired-state repository: make minimal changes on a branch named agent/<short-topic>, explain them, and ask @reviewer to review.", spaces: ["general", "development", "incidents"],
 		can: ["Read the config repository", "Create branches and commit changes", "Run checks in an isolated sandbox"],
 		cannot: ["Touch the cluster", "Merge to main", "Read secrets"] },
-	{ id: "agent:reviewer", name: "Reviewer", title: "Code review agent", color: "#d97706", spaces: ["general", "development", "incidents"],
+	{ id: "agent:reviewer", name: "Reviewer", title: "Code review agent", color: "#d97706", role: "Role: reviewer. Judge correctness, blast radius and whether a change matches the stated problem. Reply with APPROVE or CHANGES REQUESTED and the reasons; after an APPROVE tell @ops what is ready to apply.", spaces: ["general", "development", "incidents"],
 		can: ["Read branch diffs", "Run the checks on a branch", "Approve or reject changes in chat"],
 		cannot: ["Write files", "Touch the cluster"] },
-	{ id: "agent:insight", name: "Insight", title: "Analyst agent", color: "#db2777", spaces: ["general", "insights", "incidents"],
+	{ id: "agent:insight", name: "Insight", title: "Analyst agent", color: "#db2777", role: "Role: analyst. You only read. Pick the narrowest tools that answer the question, quote ids, and connect findings across systems.", spaces: ["general", "insights", "incidents"],
 		can: ["Query tickets, changes, builds and workflows (read only)", "Draw charts and tables"],
 		cannot: ["Change code or infrastructure", "Approve anything"] },
 ];
@@ -26,7 +38,7 @@ const SPACES = [
 /** A fresh realm with the demo cast. Idempotent: running it again changes nothing. */
 export function seedRealm(core: Core, realmId: string, name = "Demo Company") {
 	core.createRealm({ id: realmId, name, kind: "team" });
-	for (const a of AGENTS) core.addActor(realmId, { id: a.id, kind: "agent", name: a.name, profile: { title: a.title, color: a.color, can: a.can, cannot: a.cannot } });
+	for (const a of AGENTS) core.addActor(realmId, { id: a.id, kind: "agent", name: a.name, profile: { title: a.title, color: a.color, can: a.can, cannot: a.cannot, instructions: `${COMMON}\n\n${a.role}` } });
 	for (const s of SPACES) {
 		const agentIds = AGENTS.filter((a) => a.spaces.includes(s.id)).map((a) => a.id);
 		const { created } = core.createSpace(realmId, { id: s.id, kind: "standing", name: s.id, topic: s.topic, agentIds }, "system");

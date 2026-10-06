@@ -1,6 +1,7 @@
 import type { Core } from "../core/core.ts";
 import { handleOf } from "../core/core.ts";
 import type { AgentDispatcher } from "../core/ports.ts";
+import { failpoint } from "./failpoint.ts";
 
 /**
  * Delivers the core's outbox to an agent runtime. At-least-once by construction (a row stays pending until the runtime
@@ -46,6 +47,7 @@ export class DispatchPump {
 	private async deliver(item: ReturnType<Core["pendingOutbox"]>[number]) {
 		try {
 			await this.runtime.dispatch({ realmId: item.realmId, spaceId: item.spaceId, agentId: item.agentId, text: item.text, from: item.from, messageId: item.messageId, depth: item.depth });
+			failpoint("pump:before-mark");
 			this.core.markOutbox(item.id, "sent");
 		} catch (e) {
 			const msg = (e as Error).message;

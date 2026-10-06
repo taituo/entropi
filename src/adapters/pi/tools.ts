@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import { CompactionTask, defineExtension, defineTool, hook } from "@earendil-works/pi-durable";
 import { handleOf } from "../../core/core.ts";
+import { failpoint } from "../../runtime/failpoint.ts";
 import type { Core } from "../../core/core.ts";
 import type { OptChat } from "../../core/optchat.ts";
 import type { DecisionRequest, Id } from "../../core/types.ts";
@@ -70,6 +71,7 @@ export function entropiExtension(host: ToolHost) {
 				const { decision } = core.requestDecision(loc.realmId, {
 					key: `ap:${api.taskId}`, workId, question: args.action, context: { target: args.target, reason: args.reason }, urgency: "normal", requiredAuthority: "approver",
 				}, loc.agentId);
+				failpoint("tool:after-decision");
 				const d = await host.waitDecision(loc.realmId, decision.id, context.abortSignal);
 				const by = d.decidedBy ? core.getActor(loc.realmId, d.decidedBy)?.name ?? d.decidedBy : null;
 				if (d.status === "decided" && d.answer === d.options[0]) {

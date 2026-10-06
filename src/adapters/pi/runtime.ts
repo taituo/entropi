@@ -9,6 +9,7 @@ import type { DecisionRequest, Id, Message } from "../../core/types.ts";
 import { Binding, bindingKey } from "./binding.ts";
 import type { Inference, ModelRef } from "./inference.ts";
 import { entropiExtension } from "./tools.ts";
+import { failpoint } from "../../runtime/failpoint.ts";
 import { PiTranscript } from "./transcript.ts";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -198,6 +199,7 @@ export class PiRuntime implements AgentDispatcher {
 			text: "", status: "working", requestId: `reply:${o.messageId}:${o.agentId}`,
 			meta: { pi: { thread: String(conv.id), requestId }, depth: o.depth ?? 0, activity: [] },
 		});
+		failpoint("dispatch:after-reply");
 		if (reply.status === "done") return; // delivered and answered before; a redelivery has nothing left to do
 		await this.syncAgent(conv, loc);
 		const sender = core.getActor(o.realmId, o.from)?.name ?? o.from;
@@ -205,6 +207,7 @@ export class PiRuntime implements AgentDispatcher {
 		const header = `[${space.kind === "dm" ? "private chat" : `#${space.id}`}] ${core.getActor(o.realmId, o.from)?.kind === "agent" ? `@${handleOf(o.from)} (agent)` : sender}: ${o.text}`;
 		// 2. Exactly-once on Pi's side: the same requestId always returns the same submission.
 		const sub = await conv.submit({ type: "input", content: header, requestId }, ctx);
+		failpoint("dispatch:after-submit");
 		this.track(reply, sub.id);
 	}
 
@@ -234,6 +237,7 @@ export class PiRuntime implements AgentDispatcher {
 		if (!cur || cur.status === "done") return;
 		const rec = await this.storage.submission(submissionId, ctx);
 		if (!rec) return;
+		failpoint("finalize:before-update");
 		const live = this.lives.get((cur.meta.pi as any).thread);
 		if (live) { clearTimeout(live.timer); live.timer = undefined; }
 		const pi = cur.meta.pi as { thread: string };
