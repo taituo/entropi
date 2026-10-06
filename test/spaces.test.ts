@@ -113,7 +113,9 @@ test("delegation: agents only, not from a DM, both present, bounded depth, no re
 	const d = (o: Partial<{ from: string; to: string; request: string; requestId: string; depth: number; spaceId: string }> = {}) =>
 		core.delegate("payments", { spaceId: "general", from: "agent:ops", to: "agent:dev", request: "fix pool size", requestId: `r${Math.random()}`, depth: 0, ...o });
 	assert.equal(d({ requestId: "ask:1" }).created, true);
-	assert.deepEqual(d({ requestId: "ask:1", request: "other" }), { created: false, depth: 1 }, "a replay is a no-op");
+	const again = d({ requestId: "ask:1", request: "other" });
+	assert.deepEqual([again.created, again.depth], [false, 1], "a replay is a no-op");
+	assert.equal(core.listMessages("payments", "general", "human:anna").filter((m) => m.kind === "delegation").length, 1, "and posts no second message");
 	assert.equal(code(() => d({ from: "human:anna" })), "forbidden");
 	assert.equal(code(() => d({ to: "human:anna" })), "invalid");
 	assert.equal(code(() => d({ to: "agent:ops" })), "invalid");
@@ -128,4 +130,26 @@ test("delegation: agents only, not from a DM, both present, bounded depth, no re
 	assert.equal(code(() => d({ request: "one too many" })), "forbidden", "8 per 10 minutes");
 	tick(11 * 60_000);
 	assert.equal(d({ request: "later" }).created, true, "the window moves on");
+});
+
+test("outbox: a message and its wake-ups are committed together, pending until a runtime confirms", () => {
+	const { core } = world();
+	const { message } = core.postMessage("payments", "general", "human:anna", { text: "@ops @dev go", dispatchTo: ["agent:ops", "agent:dev"] });
+	assert.deepEqual(core.pendingOutbox().map((o) => [o.messageId, o.agentId, o.depth, o.from]), [[message.id, "agent:ops", 0, "human:anna"], [message.id, "agent:dev", 0, "human:anna"]]);
+	const [first] = core.pendingOutbox();
+	core.markOutbox(first.id, "sent");
+	assert.equal(core.pendingOutbox().length, 1);
+	assert.equal(core.bumpOutbox(core.pendingOutbox()[0].id, "boom"), 1);
+	assert.equal(code(() => core.postMessage("payments", "general", "human:anna", { text: "x", dispatchTo: ["agent:ghost"] })), "forbidden");
+	assert.equal(code(() => core.postMessage("payments", "general", "agent:ops", { text: "x", dispatchTo: ["agent:ops"] })), "invalid", "an agent cannot wake itself");
+});
+
+test("a failed post leaves no outbox rows; a delegation queues its wake-up with the next depth", () => {
+	const { core } = world();
+	core.createSpace("payments", { id: "pay-1", kind: "case", name: "PAY-1", agentIds: ["agent:ops"] }, "human:anna");
+	assert.equal(code(() => core.postMessage("payments", "pay-1", "human:anna", { text: "x", dispatchTo: ["agent:dev"] })), "invalid");
+	assert.equal(core.pendingOutbox().length, 0);
+	core.delegate("payments", { spaceId: "general", from: "agent:ops", to: "agent:dev", request: "fix it", requestId: "ask:7", depth: 1 });
+	const [o] = core.pendingOutbox();
+	assert.deepEqual([o.agentId, o.depth, o.text, o.from], ["agent:dev", 2, "fix it", "agent:ops"]);
 });

@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Core } from "../core/core.ts";
-import type { AgentDispatcher } from "../core/ports.ts";
 import type { Config } from "../config.ts";
 import { api, ensureMember, eventView, json, statusOf } from "./api.ts";
 import { createAuth } from "./auth.ts";
@@ -31,11 +30,11 @@ async function serveStatic(res: import("node:http").ServerResponse, pathname: st
 export type App = { server: Server; hub: Hub; close(): void };
 
 /** The HTTP transport over the core. No listen here: the caller decides the port, tests use an ephemeral one. */
-export function createApp(o: { core: Core; config: Config; dispatcher?: AgentDispatcher }): App {
+export function createApp(o: { core: Core; config: Config }): App {
 	const { core, config } = o;
 	const auth = createAuth(config);
 	const hub = new Hub(core, (e) => eventView(core, e));
-	const deps = { core, hub, dispatcher: o.dispatcher, config };
+	const deps = { core, hub, config };
 
 	const server = createServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", config.publicUrl);

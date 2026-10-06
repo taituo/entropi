@@ -3,7 +3,6 @@ import type { Core } from "../core/core.ts";
 import { handleOf, hasRole } from "../core/core.ts";
 import { CoreError } from "../core/errors.ts";
 import type { ActivityEvent, Actor, Id, Message, Space } from "../core/types.ts";
-import type { AgentDispatcher } from "../core/ports.ts";
 import type { Config } from "../config.ts";
 import type { Hub } from "./sse.ts";
 import type { User } from "./auth.ts";
@@ -62,7 +61,7 @@ export function eventView(core: Core, e: ActivityEvent): { type: string; payload
 	return { type: "event", payload: e };
 }
 
-export type Deps = { core: Core; hub: Hub; dispatcher?: AgentDispatcher; config: Pick<Config, "brand" | "defaultRealm"> };
+export type Deps = { core: Core; hub: Hub; config: Pick<Config, "brand" | "defaultRealm"> };
 
 /** All routes live under /api/realms/:realm; a person who is not a member gets 404, never 403. */
 export async function api(req: IncomingMessage, res: ServerResponse, url: URL, user: User, d: Deps) {
@@ -107,20 +106,14 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 		const body = await readBody(req);
 		const text = String(body.text ?? "").trim();
 		if (!text || text.length > 4000) throw httpError(400, "message must be 1-4000 characters");
-		const { message } = core.postMessage(realmId, spaceId, me.id, { text });
-		const space = core.getSpace(realmId, spaceId)!;
-		// A private chat answers every message; elsewhere only @mentions wake an agent.
+		const space = core.getSpace(realmId, spaceId);
+		if (!space || !core.canSee(realmId, me.id, spaceId)) throw httpError(404, "no such space");
+		// A private chat answers every message; elsewhere only @mentions wake an agent. The wake-up is committed with the
+		// message (outbox), so a crash cannot lose it.
 		const { present, absent } = core.mentions(realmId, spaceId, text);
 		const targets = space.kind === "dm" ? space.agentIds : present;
-		for (const id of absent) {
-			const names = space.agentIds.map(handleOf).join(", ");
-			core.postMessage(realmId, spaceId, "system", { kind: "notice", text: `${handleOf(id)} is not in #${space.id}. Agents here: ${names}.` });
-		}
-		for (const agentId of targets) {
-			d.dispatcher?.dispatch({ realmId, spaceId, agentId, text, from: me.id, messageId: message.id }).catch((e) => {
-				core.postMessage(realmId, spaceId, "system", { kind: "notice", text: `Could not reach ${handleOf(agentId)}: ${e.message}` });
-			});
-		}
+		const { message } = core.postMessage(realmId, spaceId, me.id, { text, dispatchTo: targets });
+		for (const id of absent) core.postMessage(realmId, spaceId, "system", { kind: "notice", text: `${handleOf(id)} is not in #${space.id}. Agents here: ${space.agentIds.map(handleOf).join(", ")}.` });
 		return json(res, 200, { message, dispatchedTo: targets });
 	}
 

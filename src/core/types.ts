@@ -134,7 +134,7 @@ export type Space = {
 	createdAt: number;
 };
 
-export type MessageKind = "chat" | "notice" | "case" | "decision" | "agent";
+export type MessageKind = "chat" | "notice" | "case" | "decision" | "agent" | "delegation";
 export type Message = {
 	id: number;
 	realmId: Id;
@@ -149,4 +149,18 @@ export type Message = {
 	status: "working" | "done";
 	createdAt: number;
 	updatedAt: number;
+};
+
+/** A pending hand-over of one message to one agent. Created with the message, consumed by the runtime adapter. */
+export type OutboxItem = {
+	id: number;
+	realmId: Id;
+	messageId: number;
+	spaceId: Id;
+	agentId: Id;
+	/** Agent-to-agent hops since the human message that started this chain. */
+	depth: number;
+	text: string;
+	from: Id;
+	attempts: number;
 };

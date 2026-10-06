@@ -7,6 +7,7 @@ import { Core } from "../src/core/core.ts";
 import { createApp } from "../src/http/app.ts";
 import { config } from "../src/config.ts";
 import type { AgentDispatcher } from "../src/core/ports.ts";
+import { DispatchPump } from "../src/runtime/pump.ts";
 
 const core = new Core(openDb(":memory:"));
 core.createRealm({ id: "main", name: "Main", kind: "team" });
@@ -17,10 +18,12 @@ core.createSpace("main", { id: "general", kind: "standing", name: "general", age
 const dispatched: any[] = [];
 const dispatcher: AgentDispatcher = { async dispatch(o) { dispatched.push(o); } };
 const cfg = { ...config, auth: { ...config.auth, mode: "dev" as const }, defaultRealm: "main" };
-const app = createApp({ core, config: cfg, dispatcher });
+const app = createApp({ core, config: cfg });
+const pump = new DispatchPump(core, dispatcher);
+pump.start();
 await new Promise<void>((r) => app.server.listen(0, r));
 const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
-after(() => app.close());
+after(() => { pump.stop(); app.close(); });
 
 async function login(as: string) {
 	const res = await fetch(`${base}/auth/login?as=${as}`, { redirect: "manual" });
@@ -76,6 +79,7 @@ test("posting: viewers cannot, operators can; @mentions wake only agents present
 	const r = await call(bob, "POST", "/api/realms/main/spaces/general/messages", { text: "@ops look, and @dev too" });
 	assert.equal(r.status, 200);
 	assert.deepEqual(r.body.dispatchedTo, ["agent:ops"]);
+	await pump.idle(); await until(() => dispatched.length === 1);
 	assert.deepEqual(dispatched.map((d) => [d.agentId, d.from]), [["agent:ops", "human:dev-bob"]]);
 	const msgs = (await call(carol, "GET", "/api/realms/main/spaces/general/messages")).body.messages;
 	assert.match(msgs.at(-1).text, /dev is not in #general/);

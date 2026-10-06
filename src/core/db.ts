@@ -72,6 +72,15 @@ ALTER TABLE decisions ADD COLUMN message_id INTEGER;
 `,
 	// Free-form actor profile: an agent's capability card (title, colour, what it can and cannot do) for UIs.
 	`ALTER TABLE actors ADD COLUMN profile TEXT NOT NULL DEFAULT '{}';`,
+	// Transactional outbox: "wake this agent with this message" is committed together with the message itself, so a crash
+	// between "message stored" and "runtime told" can never lose or duplicate the hand-over.
+	`
+CREATE TABLE outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, realm_id TEXT NOT NULL, message_id INTEGER NOT NULL, agent_id TEXT NOT NULL,
+  depth INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, error TEXT,
+  created_at INTEGER NOT NULL, done_at INTEGER, UNIQUE (realm_id, message_id, agent_id));
+CREATE INDEX outbox_pending ON outbox(status, id);
+`,
 ];
 
 export function openDb(path: string): DatabaseSync {

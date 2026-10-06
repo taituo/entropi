@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { conflict, forbidden, invalid, notFound } from "./errors.ts";
 import type {
 	Actor, ActorKind, AttentionItem, AttentionKind, DecisionRequest, ExternalRef, Focus, Id, Message, MessageKind, Presence, PresenceState,
-	Realm, RealmKind, RealmPolicy, Space, SpaceKind, WorkItem, WorkState, ActivityEvent,
+	OutboxItem, Realm, RealmKind, RealmPolicy, Space, SpaceKind, WorkItem, WorkState, ActivityEvent,
 } from "./types.ts";
 
 export const SYSTEM: Id = "system";
@@ -477,17 +477,17 @@ export class Core {
 
 	// ------------------------------------------------------------------ messages
 
-	private insertMessage(realmId: Id, spaceId: Id, author: Actor, kind: MessageKind, text: string, meta: Record<string, unknown>, status: Message["status"], requestId: string | null): Message {
+	private insertMessage(realmId: Id, spaceId: Id, author: Actor, kind: MessageKind, text: string, meta: Record<string, unknown>, status: Message["status"], requestId: string | null, dispatch = 0): Message {
 		const now = this.now();
 		const r = this.db.prepare("INSERT INTO messages (realm_id, space_id, author_id, author_name, kind, text, meta, status, request_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
 			.run(realmId, spaceId, author.id, author.name, kind, text, JSON.stringify(meta), status, requestId, now, now);
 		const m = this.getMessage(realmId, Number(r.lastInsertRowid))!;
-		this.emit(realmId, "message.posted", author.id, "message", String(m.id), { spaceId, kind, status });
+		this.emit(realmId, "message.posted", author.id, "message", String(m.id), { spaceId, kind, status, dispatch });
 		return m;
 	}
 
 	/** Idempotent per requestId, so a retried agent run does not post twice. */
-	postMessage(realmId: Id, spaceId: Id, by: Id, o: { text: string; kind?: MessageKind; meta?: Record<string, unknown>; status?: Message["status"]; requestId?: string }): { message: Message; created: boolean } {
+	postMessage(realmId: Id, spaceId: Id, by: Id, o: { text: string; kind?: MessageKind; meta?: Record<string, unknown>; status?: Message["status"]; requestId?: string; dispatchTo?: Id[]; depth?: number }): { message: Message; created: boolean } {
 		return this.tx(() => {
 			const actor = this.actor(realmId, by);
 			this.space(realmId, spaceId);
@@ -498,7 +498,12 @@ export class Core {
 				if (dup) return { message: this.getMessage(realmId, dup.id)!, created: false };
 			}
 			if (!o.text.trim() && o.status !== "working") throw invalid("empty message");
-			return { message: this.insertMessage(realmId, spaceId, actor, o.kind ?? (actor.kind === "agent" ? "agent" : "chat"), o.text, o.meta ?? {}, o.status ?? "done", o.requestId ?? null), created: true };
+			const targets = [...new Set(o.dispatchTo ?? [])];
+			const sp = this.getSpace(realmId, spaceId)!;
+			for (const t of targets) if (!sp.agentIds.includes(t) || t === by) throw invalid(`${t} cannot be woken in ${spaceId}`);
+			const message = this.insertMessage(realmId, spaceId, actor, o.kind ?? (actor.kind === "agent" ? "agent" : "chat"), o.text, o.meta ?? {}, o.status ?? "done", o.requestId ?? null, targets.length);
+			for (const t of targets) this.queueOutbox(realmId, message.id, t, o.depth ?? 0);
+			return { message, created: true };
 		});
 	}
 
@@ -557,6 +562,34 @@ export class Core {
 		this.emit(realmId, "message.updated", d.decidedBy ?? SYSTEM, "message", String(m.id), { spaceId: m.spaceId });
 	}
 
+
+	// ------------------------------------------------------------------ outbox
+
+	private queueOutbox(realmId: Id, messageId: number, agentId: Id, depth: number) {
+		this.db.prepare("INSERT OR IGNORE INTO outbox (realm_id, message_id, agent_id, depth, created_at) VALUES (?,?,?,?,?)").run(realmId, messageId, agentId, depth, this.now());
+	}
+
+	/** Hand-overs not yet confirmed by a runtime, oldest first. The runtime must be idempotent per (message, agent). */
+	pendingOutbox(limit = 50): OutboxItem[] {
+		const rows = this.db.prepare(`SELECT o.id, o.realm_id, o.message_id, o.agent_id, o.depth, o.attempts, m.space_id, m.text, m.author_id
+			FROM outbox o JOIN messages m ON m.realm_id = o.realm_id AND m.id = o.message_id WHERE o.status = 'pending' ORDER BY o.id LIMIT ?`).all(limit) as Row[];
+		return rows.map((r) => ({ id: r.id, realmId: r.realm_id, messageId: r.message_id, spaceId: r.space_id, agentId: r.agent_id, depth: r.depth, text: r.text, from: r.author_id, attempts: r.attempts }));
+	}
+
+	markOutbox(id: number, status: "sent" | "failed", error?: string) {
+		this.db.prepare("UPDATE outbox SET status = ?, error = ?, done_at = ? WHERE id = ?").run(status, error ?? null, this.now(), id);
+	}
+
+	bumpOutbox(id: number, error: string): number {
+		this.db.prepare("UPDATE outbox SET attempts = attempts + 1, error = ? WHERE id = ?").run(error, id);
+		return (this.db.prepare("SELECT attempts FROM outbox WHERE id = ?").get(id) as Row).attempts;
+	}
+
+	/** Agent messages still being written: what a restarted runtime has to pick up again. */
+	workingMessages(): Message[] {
+		return (this.db.prepare("SELECT * FROM messages WHERE status = 'working' ORDER BY id").all() as Row[]).map(rowToMessage);
+	}
+
 	// ------------------------------------------------------------------ delegation
 
 	/**
@@ -564,7 +597,7 @@ export class Core {
 	 * present, bounded depth, no repeating the same ask, and a rate limit per space. All counted from the event log, so
 	 * limits survive restarts and replays are idempotent per requestId.
 	 */
-	delegate(realmId: Id, o: { spaceId: Id; from: Id; to: Id; request: string; requestId: string; depth?: number }): { created: boolean; depth: number } {
+	delegate(realmId: Id, o: { spaceId: Id; from: Id; to: Id; request: string; requestId: string; depth?: number }): { created: boolean; depth: number; messageId: number | null } {
 		return this.tx(() => {
 			const realm = this.realm(realmId);
 			const from = this.actor(realmId, o.from);
@@ -578,7 +611,7 @@ export class Core {
 			if (!s.agentIds.includes(from.id)) throw forbidden(`${from.id} is not in ${s.id}`);
 			if (!s.agentIds.includes(to.id)) throw notFound(`agent ${handleOf(to.id)} in ${s.id}. Present: ${s.agentIds.map(handleOf).join(", ")}`);
 			const dup = this.db.prepare("SELECT 1 FROM events WHERE realm_id = ? AND type = 'delegation.requested' AND json_extract(data, '$.requestId') = ?").get(realmId, o.requestId);
-			if (dup) return { created: false, depth: depth + 1 };
+			if (dup) return { created: false, depth: depth + 1, messageId: (this.db.prepare("SELECT id FROM messages WHERE realm_id = ? AND request_id = ?").get(realmId, `delegate:${o.requestId}`) as Row | undefined)?.id ?? null };
 			if (depth >= realm.policy.maxDelegationDepth) throw forbidden(`delegation depth limit (${realm.policy.maxDelegationDepth}) reached. Do not ask other agents again: summarize what is known and blocked, and let a human decide.`);
 			const hash = `${to.id}:${o.request.trim().toLowerCase().slice(0, 160)}`;
 			const since = this.now() - 600_000;
@@ -586,7 +619,11 @@ export class Core {
 			if (recent.some((r) => JSON.parse(r.data).hash === hash)) throw conflict(`@${handleOf(to.id)} was already asked the same thing recently; wait for the answer instead of repeating it`);
 			if (recent.length >= realm.policy.delegationsPer10Min) throw forbidden("delegation limit reached in this space; ask a human to continue");
 			this.emit(realmId, "delegation.requested", from.id, "space", o.spaceId, { spaceId: o.spaceId, to: to.id, depth: depth + 1, hash, requestId: o.requestId });
-			return { created: true, depth: depth + 1 };
+			// The hand-over is a message people can read, and the wake-up is queued in the same transaction.
+			const { message } = this.postMessage(realmId, o.spaceId, from.id, {
+				kind: "delegation", text: o.request, meta: { to: handleOf(to.id), toId: to.id, requestId: o.requestId }, requestId: `delegate:${o.requestId}`, dispatchTo: [to.id], depth: depth + 1,
+			});
+			return { created: true, depth: depth + 1, messageId: message.id };
 		});
 	}
 
