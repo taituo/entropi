@@ -585,6 +585,12 @@ export class Core {
 		return (this.db.prepare("SELECT attempts FROM outbox WHERE id = ?").get(id) as Row).attempts;
 	}
 
+	/** The message with this id if it is still being written. */
+	findMessage(messageId: number): Message | undefined {
+		const r = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(messageId) as Row | undefined;
+		return r ? rowToMessage(r) : undefined;
+	}
+
 	/** Agent messages still being written: what a restarted runtime has to pick up again. */
 	workingMessages(): Message[] {
 		return (this.db.prepare("SELECT * FROM messages WHERE status = 'working' ORDER BY id").all() as Row[]).map(rowToMessage);
