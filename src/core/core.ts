@@ -623,7 +623,7 @@ export class Core {
 		const needsYou: Focus["needsYou"] = [];
 		for (const item of attention.filter((a) => a.kind === "decision")) {
 			const d = this.getDecision(realmId, item.subjectId);
-			if (d && d.status === "open" && this.canSeeWork(realmId, actorId, d.workId) && (actor.kind !== "human" ? false : this.canDecideIgnoringPresence(realmId, d, actor))) needsYou.push({ decision: d, attention: item });
+			if (d && d.status === "open" && this.canSeeWork(realmId, actorId, d.workId) && (actor.kind !== "human" ? false : this.canDecideIgnoringPresence(realmId, d, actor))) needsYou.push({ decision: d, attention: item, spaceId: this.getWork(realmId, d.workId)?.spaceId ?? null });
 		}
 		const urgency = { high: 0, normal: 1, low: 2 } as const;
 		needsYou.sort((x, y) => urgency[x.decision.urgency] - urgency[y.decision.urgency] || x.attention.createdAt - y.attention.createdAt);

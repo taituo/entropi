@@ -110,7 +110,7 @@ export type ActivityEvent = {
 /** What a person sees: the smallest set of things worth their thought. */
 export type Focus = {
 	realmId: Id;
-	needsYou: { decision: DecisionRequest; attention: AttentionItem }[];
+	needsYou: { decision: DecisionRequest; attention: AttentionItem; spaceId: Id | null }[];
 	attention: AttentionItem[];
 	working: WorkItem[];
 	waiting: WorkItem[];
