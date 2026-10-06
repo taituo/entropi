@@ -2,14 +2,18 @@ import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { conflict, forbidden, invalid, notFound } from "./errors.ts";
 import type {
-	Actor, ActorKind, AttentionItem, AttentionKind, DecisionRequest, ExternalRef, Focus, Id, Presence, PresenceState, Realm,
-	RealmKind, RealmPolicy, WorkItem, WorkState, ActivityEvent,
+	Actor, ActorKind, AttentionItem, AttentionKind, DecisionRequest, ExternalRef, Focus, Id, Message, MessageKind, Presence, PresenceState,
+	Realm, RealmKind, RealmPolicy, Space, SpaceKind, WorkItem, WorkState, ActivityEvent,
 } from "./types.ts";
 
 export const SYSTEM: Id = "system";
 const WORK_STATES: WorkState[] = ["queued", "working", "waiting", "blocked", "failed", "done", "cancelled"];
 const TERMINAL: WorkState[] = ["done", "cancelled"];
-const DEFAULT_POLICY: RealmPolicy = { separationOfDuties: true, autonomy: "low" };
+const DEFAULT_POLICY: RealmPolicy = { separationOfDuties: true, autonomy: "low", maxDelegationDepth: 3, delegationsPer10Min: 8 };
+/** Built-in roles are a ladder (an approver is also an operator); any other role must match exactly. */
+const RANK: Record<string, number> = { viewer: 0, operator: 1, approver: 2, admin: 3 };
+export const hasRole = (a: Pick<Actor, "roles">, role: string): boolean =>
+	role in RANK ? a.roles.some((r) => (RANK[r] ?? -1) >= RANK[role]) : a.roles.includes(role) || a.roles.includes("admin");
 
 type Row = Record<string, any>;
 export type Listener = (e: ActivityEvent) => void;
@@ -59,11 +63,32 @@ export class Core {
 
 	private emit(realmId: Id, type: string, actorId: Id, subjectKind: string, subjectId: Id, data: Record<string, unknown> = {}): ActivityEvent {
 		const ts = this.now();
+		if (data.spaceId === undefined) {
+			const spaceId = this.spaceOfSubject(realmId, subjectKind, subjectId);
+			if (spaceId) data = { ...data, spaceId };
+		}
 		const r = this.db.prepare("INSERT INTO events (realm_id, ts, type, actor_id, subject_kind, subject_id, data) VALUES (?,?,?,?,?,?,?)")
 			.run(realmId, ts, type, actorId, subjectKind, subjectId, JSON.stringify(data));
 		const e: ActivityEvent = { seq: Number(r.lastInsertRowid), realmId, ts, type, actorId, subjectKind, subjectId, data };
 		this.pending.push(e);
 		return e;
+	}
+
+	/** The space an event belongs to, so transports can filter per viewer. Realm-wide events have none. */
+	private spaceOfSubject(realmId: Id, kind: string, id: Id): Id | null {
+		const r = kind === "work"
+			? this.db.prepare("SELECT space_id s FROM work WHERE realm_id = ? AND id = ?").get(realmId, id)
+			: kind === "decision"
+				? this.db.prepare("SELECT w.space_id s FROM decisions d JOIN work w ON w.realm_id = d.realm_id AND w.id = d.work_id WHERE d.realm_id = ? AND d.id = ?").get(realmId, id)
+				: undefined;
+		return ((r as Row | undefined)?.s as string | null) ?? null;
+	}
+
+	/** May this actor see this event? Space-scoped events follow the space's visibility; the rest is realm-wide. */
+	canSeeEvent(e: ActivityEvent, actorId: Id): boolean {
+		if (!this.getActor(e.realmId, actorId)) return false;
+		const spaceId = e.data.spaceId;
+		return typeof spaceId !== "string" || this.canSee(e.realmId, actorId, spaceId);
 	}
 
 	subscribe(l: Listener): () => void {
@@ -163,7 +188,7 @@ export class Core {
 
 	// ------------------------------------------------------------------ work
 
-	createWork(realmId: Id, o: { id?: Id; kind: string; title: string; goal?: string; ownerId?: Id | null; parentId?: Id | null; state?: WorkState }, by: Id): WorkItem {
+	createWork(realmId: Id, o: { id?: Id; kind: string; title: string; goal?: string; ownerId?: Id | null; parentId?: Id | null; spaceId?: Id | null; state?: WorkState }, by: Id): WorkItem {
 		return this.tx(() => {
 			this.realm(realmId);
 			this.actor(realmId, by);
@@ -173,11 +198,12 @@ export class Core {
 			if (!o.title.trim()) throw invalid("work needs a title");
 			if (o.ownerId) this.actor(realmId, o.ownerId);
 			if (o.parentId && !this.getWork(realmId, o.parentId)) throw notFound(`parent work ${o.parentId}`);
+			if (o.spaceId && !this.getSpace(realmId, o.spaceId)) throw notFound(`space ${o.spaceId}`);
 			const state = o.state ?? "queued";
 			if (!WORK_STATES.includes(state)) throw invalid(`unknown work state ${state}`);
 			const now = this.now();
-			this.db.prepare("INSERT INTO work (realm_id, id, kind, title, goal, state, phase, owner_id, parent_id, created_at, updated_at) VALUES (?,?,?,?,?,?,NULL,?,?,?,?)")
-				.run(realmId, id, o.kind, o.title, o.goal ?? "", state, o.ownerId ?? null, o.parentId ?? null, now, now);
+			this.db.prepare("INSERT INTO work (realm_id, id, kind, title, goal, state, phase, owner_id, parent_id, space_id, created_at, updated_at) VALUES (?,?,?,?,?,?,NULL,?,?,?,?,?)")
+				.run(realmId, id, o.kind, o.title, o.goal ?? "", state, o.ownerId ?? null, o.parentId ?? null, o.spaceId ?? null, now, now);
 			this.emit(realmId, "work.created", by, "work", id, { kind: o.kind, title: o.title, state, parentId: o.parentId ?? null });
 			return this.getWork(realmId, id)!;
 		});
@@ -279,6 +305,12 @@ export class Core {
 				VALUES (?,?,?,?,?,?,?,?,?,?, 'open', ?, ?)`)
 				.run(realmId, id, o.key, o.workId, o.question, JSON.stringify(options), JSON.stringify(o.context ?? {}), o.urgency ?? "normal", o.requiredAuthority ?? "approver", by, this.now(), o.expiresAt ?? null);
 			this.emit(realmId, "decision.requested", by, "decision", id, { workId: o.workId, question: o.question, options, urgency: o.urgency ?? "normal", requiredAuthority: o.requiredAuthority ?? "approver" });
+			if (w.spaceId) {
+				const card = this.insertMessage(realmId, w.spaceId, this.actor(realmId, by), "decision", o.question, {
+					decisionId: id, status: "open", options, context: o.context ?? {}, urgency: o.urgency ?? "normal", requiredAuthority: o.requiredAuthority ?? "approver", workId: o.workId,
+				}, "done", null);
+				this.db.prepare("UPDATE decisions SET message_id = ? WHERE realm_id = ? AND id = ?").run(card.id, realmId, id);
+			}
 			this.raise(realmId, "decision", o.workId, id, o.question);
 			if (w.state !== "waiting") this.setWorkState(realmId, o.workId, "waiting", by, { reason: "decision requested" });
 			return { decision: this.getDecision(realmId, id)!, created: true };
@@ -301,7 +333,7 @@ export class Core {
 		const a = this.getActor(realmId, actorId);
 		if (!a) return { ok: false, reason: `${actorId} is not a member of realm ${realmId}` };
 		if (a.kind !== "human") return { ok: false, reason: "only a human can decide" };
-		if (!a.roles.includes(decision.requiredAuthority) && !a.roles.includes("admin")) return { ok: false, reason: `needs the ${decision.requiredAuthority} role` };
+		if (!hasRole(a, decision.requiredAuthority)) return { ok: false, reason: `needs the ${decision.requiredAuthority} role` };
 		if (realm.policy.separationOfDuties && decision.requestedBy === actorId) return { ok: false, reason: "requester cannot decide their own request" };
 		const p = this.getPresence(realmId, actorId);
 		if (p && p.state !== "active") return { ok: false, reason: p.echo ? "away: Echo may answer questions but never decide" : `presence is ${p.state}` };
@@ -320,6 +352,7 @@ export class Core {
 			this.db.prepare("UPDATE decisions SET status = 'decided', answer = ?, decided_by = ?, note = ?, decided_at = ? WHERE realm_id = ? AND id = ? AND status = 'open'")
 				.run(answer, actorId, note ?? null, this.now(), realmId, decisionId);
 			this.emit(realmId, "decision.decided", actorId, "decision", decisionId, { workId: d.workId, answer, note: note ?? null });
+			this.syncDecisionCard(realmId, decisionId);
 			this.resolve(realmId, "decision", decisionId);
 			const w = this.work(realmId, d.workId);
 			if (w.state === "waiting" && this.openDecisions(realmId, d.workId).length === 0) this.setWorkState(realmId, d.workId, "working", actorId, { reason: `decided: ${answer}` });
@@ -338,6 +371,7 @@ export class Core {
 		for (const d of this.openDecisions(realmId, workId)) {
 			this.db.prepare("UPDATE decisions SET status = 'cancelled', decided_at = ? WHERE realm_id = ? AND id = ?").run(this.now(), realmId, d.id);
 			this.emit(realmId, "decision.cancelled", by, "decision", d.id, { workId, why });
+			this.syncDecisionCard(realmId, d.id);
 			this.resolve(realmId, "decision", d.id);
 		}
 	}
@@ -349,9 +383,208 @@ export class Core {
 			for (const r of rows) {
 				this.db.prepare("UPDATE decisions SET status = 'expired', decided_at = ? WHERE realm_id = ? AND id = ?").run(this.now(), r.realm_id, r.id);
 				this.emit(r.realm_id, "decision.expired", SYSTEM, "decision", r.id, { workId: r.work_id });
+				this.syncDecisionCard(r.realm_id, r.id);
 				this.resolve(r.realm_id, "decision", r.id);
 			}
 			return rows.length;
+		});
+	}
+
+
+	// ------------------------------------------------------------------ spaces (channels)
+
+	/** Idempotent per id. A DM belongs to one human and holds exactly one agent. */
+	createSpace(realmId: Id, o: { id?: Id; kind: SpaceKind; name: string; topic?: string; ownerId?: Id | null; agentIds?: Id[] }, by: Id): { space: Space; created: boolean } {
+		return this.tx(() => {
+			this.realm(realmId);
+			this.actor(realmId, by);
+			const id = o.id ?? slug(o.name);
+			if (id.length < 2) throw invalid("space name must have at least 2 letters or digits");
+			const have = this.getSpace(realmId, id);
+			if (have) return { space: have, created: false };
+			const agentIds = [...new Set(o.agentIds ?? [])];
+			for (const a of agentIds) if (this.actor(realmId, a).kind !== "agent") throw invalid(`${a} is not an agent`);
+			if (o.kind === "dm") {
+				if (!o.ownerId || this.actor(realmId, o.ownerId).kind !== "human") throw invalid("a DM needs a human owner");
+				if (agentIds.length !== 1) throw invalid("a DM holds exactly one agent");
+			} else if (o.ownerId) throw invalid("only a DM has an owner");
+			this.db.prepare("INSERT INTO spaces (realm_id, id, kind, name, topic, status, owner_id, agent_ids, created_by, created_at) VALUES (?,?,?,?,?,'open',?,?,?,?)")
+				.run(realmId, id, o.kind, o.name, (o.topic ?? "").slice(0, 200), o.ownerId ?? null, JSON.stringify(agentIds), by, this.now());
+			// A DM's existence is private too: its event carries the space id, so only the owner's stream sees it.
+			this.emit(realmId, "space.created", by, "space", id, { spaceId: id, kind: o.kind, name: o.name, agentIds });
+			return { space: this.getSpace(realmId, id)!, created: true };
+		});
+	}
+
+	getSpace(realmId: Id, id: Id): Space | undefined {
+		const r = this.db.prepare("SELECT * FROM spaces WHERE realm_id = ? AND id = ?").get(realmId, id) as Row | undefined;
+		return r ? rowToSpace(r) : undefined;
+	}
+
+	private space(realmId: Id, id: Id): Space {
+		const s = this.getSpace(realmId, id);
+		if (!s) throw notFound(`space ${id} in realm ${realmId}`);
+		return s;
+	}
+
+	/** DMs are visible to their owner and their agent only; every other space to every member of the realm. */
+	canSee(realmId: Id, actorId: Id, spaceId: Id): boolean {
+		const a = this.getActor(realmId, actorId);
+		const s = this.getSpace(realmId, spaceId);
+		if (!a || !s) return false;
+		if (a.kind === "system") return true;
+		return s.kind !== "dm" || s.ownerId === actorId || s.agentIds.includes(actorId);
+	}
+
+	private canSeeWork(realmId: Id, actorId: Id, workId: Id): boolean {
+		const w = this.getWork(realmId, workId);
+		return !w?.spaceId || this.canSee(realmId, actorId, w.spaceId);
+	}
+
+	listSpaces(realmId: Id, forActor: Id, includeArchived = true): Space[] {
+		const rows = this.db.prepare("SELECT * FROM spaces WHERE realm_id = ? ORDER BY created_at, id").all(realmId) as Row[];
+		const order = { standing: 0, case: 1, dm: 2 } as const;
+		return rows.map(rowToSpace)
+			.filter((s) => (includeArchived || s.status === "open") && this.canSee(realmId, forActor, s.id))
+			.sort((a, b) => order[a.kind] - order[b.kind] || a.createdAt - b.createdAt);
+	}
+
+	/** Only cases end; standing rooms and DMs are permanent. Archived spaces stay readable but take no new messages. */
+	setSpaceStatus(realmId: Id, spaceId: Id, status: "open" | "archived", by: Id): Space {
+		return this.tx(() => {
+			const actor = this.actor(realmId, by);
+			const s = this.space(realmId, spaceId);
+			if (!this.canSee(realmId, by, spaceId)) throw notFound(`space ${spaceId} in realm ${realmId}`);
+			if (s.kind !== "case") throw invalid("only case spaces can be archived");
+			if (actor.kind === "human" && !hasRole(actor, "operator")) throw forbidden("operators only");
+			if (s.status !== status) {
+				this.db.prepare("UPDATE spaces SET status = ? WHERE realm_id = ? AND id = ?").run(status, realmId, spaceId);
+				this.emit(realmId, `space.${status === "archived" ? "archived" : "reopened"}`, by, "space", spaceId, { spaceId });
+			}
+			return this.space(realmId, spaceId);
+		});
+	}
+
+	canPost(realmId: Id, actorId: Id, spaceId: Id): boolean {
+		const a = this.getActor(realmId, actorId);
+		const s = this.getSpace(realmId, spaceId);
+		if (!a || !s || s.status !== "open" || !this.canSee(realmId, actorId, spaceId)) return false;
+		if (a.kind === "system") return true;
+		if (a.kind === "agent") return s.agentIds.includes(actorId);
+		return hasRole(a, "operator");
+	}
+
+	// ------------------------------------------------------------------ messages
+
+	private insertMessage(realmId: Id, spaceId: Id, author: Actor, kind: MessageKind, text: string, meta: Record<string, unknown>, status: Message["status"], requestId: string | null): Message {
+		const now = this.now();
+		const r = this.db.prepare("INSERT INTO messages (realm_id, space_id, author_id, author_name, kind, text, meta, status, request_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+			.run(realmId, spaceId, author.id, author.name, kind, text, JSON.stringify(meta), status, requestId, now, now);
+		const m = this.getMessage(realmId, Number(r.lastInsertRowid))!;
+		this.emit(realmId, "message.posted", author.id, "message", String(m.id), { spaceId, kind, status });
+		return m;
+	}
+
+	/** Idempotent per requestId, so a retried agent run does not post twice. */
+	postMessage(realmId: Id, spaceId: Id, by: Id, o: { text: string; kind?: MessageKind; meta?: Record<string, unknown>; status?: Message["status"]; requestId?: string }): { message: Message; created: boolean } {
+		return this.tx(() => {
+			const actor = this.actor(realmId, by);
+			this.space(realmId, spaceId);
+			if (!this.canSee(realmId, by, spaceId)) throw notFound(`space ${spaceId} in realm ${realmId}`);
+			if (!this.canPost(realmId, by, spaceId)) throw forbidden(this.getSpace(realmId, spaceId)!.status === "archived" ? "this case is archived; reopen it to continue" : "you cannot post here");
+			if (o.requestId) {
+				const dup = this.db.prepare("SELECT id FROM messages WHERE realm_id = ? AND request_id = ?").get(realmId, o.requestId) as Row | undefined;
+				if (dup) return { message: this.getMessage(realmId, dup.id)!, created: false };
+			}
+			if (!o.text.trim() && o.status !== "working") throw invalid("empty message");
+			return { message: this.insertMessage(realmId, spaceId, actor, o.kind ?? (actor.kind === "agent" ? "agent" : "chat"), o.text, o.meta ?? {}, o.status ?? "done", o.requestId ?? null), created: true };
+		});
+	}
+
+	getMessage(realmId: Id, id: number): Message | undefined {
+		const r = this.db.prepare("SELECT * FROM messages WHERE realm_id = ? AND id = ?").get(realmId, id) as Row | undefined;
+		return r ? rowToMessage(r) : undefined;
+	}
+
+	/**
+	 * The author (an agent still writing) updates its message. Streaming updates change the row silently; only the
+	 * working -> done transition is a fact worth a log event, so the log is not flooded with token deltas.
+	 */
+	updateMessage(realmId: Id, id: number, by: Id, patch: { text?: string; meta?: Record<string, unknown>; status?: Message["status"] }): Message {
+		return this.tx(() => {
+			this.actor(realmId, by);
+			const m = this.getMessage(realmId, id);
+			if (!m || !this.canSee(realmId, by, m.spaceId)) throw notFound(`message ${id}`);
+			if (m.authorId !== by && by !== SYSTEM) throw forbidden("only the author can edit a message");
+			const status = patch.status ?? m.status;
+			this.db.prepare("UPDATE messages SET text = ?, meta = ?, status = ?, updated_at = ? WHERE realm_id = ? AND id = ?")
+				.run(patch.text ?? m.text, JSON.stringify(patch.meta ?? m.meta), status, this.now(), realmId, id);
+			if (m.status === "working" && status === "done") this.emit(realmId, "message.completed", by, "message", String(id), { spaceId: m.spaceId });
+			return this.getMessage(realmId, id)!;
+		});
+	}
+
+	/** Newest `limit` messages the viewer may see, oldest first. */
+	listMessages(realmId: Id, spaceId: Id, forActor: Id, limit = 200): Message[] {
+		if (!this.canSee(realmId, forActor, spaceId)) throw notFound(`space ${spaceId} in realm ${realmId}`);
+		const rows = this.db.prepare("SELECT * FROM (SELECT * FROM messages WHERE realm_id = ? AND space_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id").all(realmId, spaceId, limit) as Row[];
+		return rows.map(rowToMessage);
+	}
+
+	/** @handles in a message, split into agents present in the space and agents of the realm that are not. */
+	mentions(realmId: Id, spaceId: Id, text: string): { present: Id[]; absent: Id[] } {
+		const s = this.space(realmId, spaceId);
+		const handles = new Set([...text.matchAll(/@([a-zA-Z][\w-]*)/g)].map((m) => m[1].toLowerCase()));
+		const agents = this.listActors(realmId).filter((a) => a.kind === "agent");
+		const present: Id[] = [], absent: Id[] = [];
+		for (const a of agents) {
+			if (!handles.has(handleOf(a.id))) continue;
+			(s.agentIds.includes(a.id) ? present : absent).push(a.id);
+		}
+		return { present, absent };
+	}
+
+	/** Keep the approval card in a space in line with its decision. */
+	private syncDecisionCard(realmId: Id, decisionId: Id) {
+		const d = this.getDecision(realmId, decisionId);
+		const mid = (this.db.prepare("SELECT message_id m FROM decisions WHERE realm_id = ? AND id = ?").get(realmId, decisionId) as Row | undefined)?.m as number | null | undefined;
+		const m = mid ? this.getMessage(realmId, mid) : undefined;
+		if (!d || !m) return;
+		const by = d.decidedBy ? this.getActor(realmId, d.decidedBy) : undefined;
+		this.db.prepare("UPDATE messages SET meta = ?, updated_at = ? WHERE realm_id = ? AND id = ?")
+			.run(JSON.stringify({ ...m.meta, status: d.status, answer: d.answer, decidedBy: by?.name ?? d.decidedBy, decidedById: d.decidedBy, note: d.note }), this.now(), realmId, m.id);
+	}
+
+	// ------------------------------------------------------------------ delegation
+
+	/**
+	 * One agent hands work to another in a space. The rules live here, not in the agent's tool: no DMs, no self, both
+	 * present, bounded depth, no repeating the same ask, and a rate limit per space. All counted from the event log, so
+	 * limits survive restarts and replays are idempotent per requestId.
+	 */
+	delegate(realmId: Id, o: { spaceId: Id; from: Id; to: Id; request: string; requestId: string; depth?: number }): { created: boolean; depth: number } {
+		return this.tx(() => {
+			const realm = this.realm(realmId);
+			const from = this.actor(realmId, o.from);
+			const to = this.actor(realmId, o.to);
+			const s = this.space(realmId, o.spaceId);
+			const depth = o.depth ?? 0;
+			if (from.kind !== "agent") throw forbidden("only agents delegate; people @mention");
+			if (s.kind === "dm") throw forbidden("a private chat cannot hand work to other agents");
+			if (to.kind !== "agent") throw invalid("work can only be delegated to an agent");
+			if (to.id === from.id) throw invalid("cannot ask yourself");
+			if (!s.agentIds.includes(from.id)) throw forbidden(`${from.id} is not in ${s.id}`);
+			if (!s.agentIds.includes(to.id)) throw notFound(`agent ${handleOf(to.id)} in ${s.id}. Present: ${s.agentIds.map(handleOf).join(", ")}`);
+			const dup = this.db.prepare("SELECT 1 FROM events WHERE realm_id = ? AND type = 'delegation.requested' AND json_extract(data, '$.requestId') = ?").get(realmId, o.requestId);
+			if (dup) return { created: false, depth: depth + 1 };
+			if (depth >= realm.policy.maxDelegationDepth) throw forbidden(`delegation depth limit (${realm.policy.maxDelegationDepth}) reached. Do not ask other agents again: summarize what is known and blocked, and let a human decide.`);
+			const hash = `${to.id}:${o.request.trim().toLowerCase().slice(0, 160)}`;
+			const since = this.now() - 600_000;
+			const recent = this.db.prepare("SELECT data FROM events WHERE realm_id = ? AND type = 'delegation.requested' AND ts >= ? AND json_extract(data, '$.spaceId') = ?").all(realmId, since, o.spaceId) as Row[];
+			if (recent.some((r) => JSON.parse(r.data).hash === hash)) throw conflict(`@${handleOf(to.id)} was already asked the same thing recently; wait for the answer instead of repeating it`);
+			if (recent.length >= realm.policy.delegationsPer10Min) throw forbidden("delegation limit reached in this space; ask a human to continue");
+			this.emit(realmId, "delegation.requested", from.id, "space", o.spaceId, { spaceId: o.spaceId, to: to.id, depth: depth + 1, hash, requestId: o.requestId });
+			return { created: true, depth: depth + 1 };
 		});
 	}
 
@@ -384,15 +617,15 @@ export class Core {
 	focus(realmId: Id, actorId: Id): Focus {
 		this.realm(realmId);
 		const actor = this.actor(realmId, actorId);
-		const attention = this.openAttention(realmId);
+		const attention = this.openAttention(realmId).filter((a) => this.canSeeWork(realmId, actorId, a.workId));
 		const needsYou: Focus["needsYou"] = [];
 		for (const item of attention.filter((a) => a.kind === "decision")) {
 			const d = this.getDecision(realmId, item.subjectId);
-			if (d && d.status === "open" && (actor.kind !== "human" ? false : this.canDecideIgnoringPresence(realmId, d, actor))) needsYou.push({ decision: d, attention: item });
+			if (d && d.status === "open" && this.canSeeWork(realmId, actorId, d.workId) && (actor.kind !== "human" ? false : this.canDecideIgnoringPresence(realmId, d, actor))) needsYou.push({ decision: d, attention: item });
 		}
 		const urgency = { high: 0, normal: 1, low: 2 } as const;
 		needsYou.sort((x, y) => urgency[x.decision.urgency] - urgency[y.decision.urgency] || x.attention.createdAt - y.attention.createdAt);
-		const all = this.listWork(realmId).filter((w) => !TERMINAL.includes(w.state));
+		const all = this.listWork(realmId).filter((w) => !TERMINAL.includes(w.state) && this.canSeeWork(realmId, actorId, w.id));
 		const working = all.filter((w) => w.state === "working");
 		const waiting = all.filter((w) => w.state === "waiting" && !needsYou.some((n) => n.decision.workId === w.id));
 		const shown = new Set([...working, ...waiting].map((w) => w.id));
@@ -409,16 +642,26 @@ export class Core {
 	/** Away humans still *see* what needs them; presence only blocks deciding. */
 	private canDecideIgnoringPresence(realmId: Id, d: DecisionRequest, a: Actor): boolean {
 		const policy = this.realm(realmId).policy;
-		if (!a.roles.includes(d.requiredAuthority) && !a.roles.includes("admin")) return false;
+		if (!hasRole(a, d.requiredAuthority)) return false;
 		return !(policy.separationOfDuties && d.requestedBy === a.id);
 	}
 }
 
 // ------------------------------------------------------------------ row mappers
 
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+/** "agent:ops" -> "ops": the @handle people type. */
+export const handleOf = (actorId: Id) => actorId.split(":").pop()!.toLowerCase();
+const rowToSpace = (r: Row): Space => ({
+	realmId: r.realm_id, id: r.id, kind: r.kind, name: r.name, topic: r.topic, status: r.status, ownerId: r.owner_id, agentIds: JSON.parse(r.agent_ids), createdBy: r.created_by, createdAt: r.created_at,
+});
+const rowToMessage = (r: Row): Message => ({
+	id: r.id, realmId: r.realm_id, spaceId: r.space_id, authorId: r.author_id, authorName: r.author_name, kind: r.kind, text: r.text, meta: JSON.parse(r.meta), status: r.status, createdAt: r.created_at, updatedAt: r.updated_at,
+});
+
 const rowToWork = (r: Row): WorkItem => ({
 	realmId: r.realm_id, id: r.id, kind: r.kind, title: r.title, goal: r.goal, state: r.state, phase: r.phase,
-	ownerId: r.owner_id, parentId: r.parent_id, createdAt: r.created_at, updatedAt: r.updated_at,
+	ownerId: r.owner_id, parentId: r.parent_id, spaceId: r.space_id ?? null, createdAt: r.created_at, updatedAt: r.updated_at,
 });
 const rowToRef = (r: Row): ExternalRef => ({
 	realmId: r.realm_id, workId: r.work_id, source: r.source, externalId: r.external_id, label: r.label, url: r.url, state: r.state, observedAt: r.observed_at,

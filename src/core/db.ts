@@ -54,6 +54,22 @@ CREATE TABLE memnodes (
   thread TEXT NOT NULL, level INTEGER NOT NULL, idx INTEGER NOT NULL, text TEXT NOT NULL, quality TEXT NOT NULL,
   PRIMARY KEY (thread, level, idx));
 `,
+	// Spaces (channels), messages, and the links from work/decisions into a space.
+	`
+CREATE TABLE spaces (
+  realm_id TEXT NOT NULL REFERENCES realms(id), id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open', owner_id TEXT, agent_ids TEXT NOT NULL DEFAULT '[]', created_by TEXT NOT NULL, created_at INTEGER NOT NULL,
+  PRIMARY KEY (realm_id, id));
+CREATE TABLE messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, realm_id TEXT NOT NULL, space_id TEXT NOT NULL, author_id TEXT NOT NULL, author_name TEXT NOT NULL,
+  kind TEXT NOT NULL, text TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'done', request_id TEXT,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  FOREIGN KEY (realm_id, space_id) REFERENCES spaces(realm_id, id));
+CREATE INDEX messages_space ON messages(realm_id, space_id, id);
+CREATE UNIQUE INDEX messages_request ON messages(realm_id, request_id) WHERE request_id IS NOT NULL;
+ALTER TABLE work ADD COLUMN space_id TEXT;
+ALTER TABLE decisions ADD COLUMN message_id INTEGER;
+`,
 ];
 
 export function openDb(path: string): DatabaseSync {

@@ -10,6 +10,10 @@ export type RealmPolicy = {
 	separationOfDuties: boolean;
 	/** How freely agents may act in this realm without a human decision. */
 	autonomy: "low" | "medium" | "high";
+	/** How many agent-to-agent hops one human message may cause. */
+	maxDelegationDepth: number;
+	/** Agent-initiated delegations allowed per space per 10 minutes. */
+	delegationsPer10Min: number;
 };
 export type Realm = { id: Id; name: string; kind: RealmKind; policy: RealmPolicy; createdAt: number };
 
@@ -32,6 +36,8 @@ export type WorkItem = {
 	state: WorkState;
 	/** Free-form stage within the state ("triage", "implement", "review"...). Adapters map their own vocabulary onto it. */
 	phase: string | null;
+	/** Space where this work is discussed; its decisions appear there as cards. */
+	spaceId: Id | null;
 	ownerId: Id | null;
 	parentId: Id | null;
 	createdAt: number;
@@ -109,4 +115,38 @@ export type Focus = {
 	working: WorkItem[];
 	waiting: WorkItem[];
 	background: { count: number };
+};
+
+export type SpaceKind = "standing" | "case" | "dm";
+/** A place where people and agents talk. Standing rooms are permanent, cases end, DMs belong to exactly one person. */
+export type Space = {
+	realmId: Id;
+	id: Id;
+	kind: SpaceKind;
+	name: string;
+	topic: string;
+	status: "open" | "archived";
+	/** dm only: the one human who can see it. Nobody else, admins included. */
+	ownerId: Id | null;
+	/** Agents present. Only these can be addressed or post here. */
+	agentIds: Id[];
+	createdBy: Id;
+	createdAt: number;
+};
+
+export type MessageKind = "chat" | "notice" | "case" | "decision" | "agent";
+export type Message = {
+	id: number;
+	realmId: Id;
+	spaceId: Id;
+	authorId: Id;
+	/** Display-name snapshot; identity is authorId. */
+	authorName: string;
+	kind: MessageKind;
+	text: string;
+	meta: Record<string, unknown>;
+	/** "working" while an agent is still writing it. */
+	status: "working" | "done";
+	createdAt: number;
+	updatedAt: number;
 };
