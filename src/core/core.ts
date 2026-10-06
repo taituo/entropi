@@ -553,6 +553,7 @@ export class Core {
 		const by = d.decidedBy ? this.getActor(realmId, d.decidedBy) : undefined;
 		this.db.prepare("UPDATE messages SET meta = ?, updated_at = ? WHERE realm_id = ? AND id = ?")
 			.run(JSON.stringify({ ...m.meta, status: d.status, answer: d.answer, decidedBy: by?.name ?? d.decidedBy, decidedById: d.decidedBy, note: d.note }), this.now(), realmId, m.id);
+		this.emit(realmId, "message.updated", d.decidedBy ?? SYSTEM, "message", String(m.id), { spaceId: m.spaceId });
 	}
 
 	// ------------------------------------------------------------------ delegation

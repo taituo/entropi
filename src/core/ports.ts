@@ -25,3 +25,8 @@ export interface TranscriptSource {
 	/** Entries with entryId > afterEntryId, oldest first. */
 	entriesAfter(thread: Id, afterEntryId: number): AsyncIterable<TranscriptEntry>;
 }
+
+/** Wakes an agent with a message. The runtime adapter implements it; the core and the HTTP layer only know this. */
+export interface AgentDispatcher {
+	dispatch(o: { realmId: Id; spaceId: Id; agentId: Id; text: string; from: Id; messageId: number; depth?: number }): Promise<void>;
+}
