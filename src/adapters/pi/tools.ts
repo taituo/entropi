@@ -14,6 +14,8 @@ export interface ToolHost {
 	locate(conversationId: unknown): { realmId: Id; spaceId: Id; agentId: Id } | undefined;
 	/** Hops from the human message that started the run this conversation is in. Read from the core, so it survives restarts. */
 	depthOf(conversationId: unknown): number;
+	/** Identity of the run in progress (the agent message being written), to bound how often it can delegate. */
+	runOf(conversationId: unknown): string | undefined;
 	waitDecision(realmId: Id, decisionId: Id, signal?: AbortSignal): Promise<DecisionRequest>;
 }
 
@@ -44,7 +46,7 @@ export function entropiExtension(host: ToolHost) {
 				const handle = args.agent.toLowerCase().replace(/^@/, "");
 				const to = space.agentIds.find((id) => handleOf(id) === handle);
 				if (!to) throw new Error(`no agent "${args.agent}" in this space. Present: ${space.agentIds.map(handleOf).join(", ")}`);
-				const r = core.delegate(loc.realmId, { spaceId: loc.spaceId, from: loc.agentId, to, request: args.request, requestId: `ask:${api.taskId}`, depth: host.depthOf(api.conversationId) });
+				const r = core.delegate(loc.realmId, { spaceId: loc.spaceId, from: loc.agentId, to, request: args.request, requestId: `ask:${api.taskId}`, depth: host.depthOf(api.conversationId), runId: host.runOf(api.conversationId) });
 				return text(`${r.created ? "Asked" : "Already asked"} @${handle}. Their answer will appear in the space.`);
 			} catch (e) {
 				return fail(e);

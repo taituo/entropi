@@ -7,7 +7,7 @@ import { Binding } from "../../src/adapters/pi/binding.ts";
 
 const [dir, action, arg] = process.argv.slice(2);
 const storage = await openNodeSqliteStorage(join(dir, "pi.sqlite"));
-const w = await makeWorld({ dbPath: join(dir, "core.sqlite"), storage });
+const w = await makeWorld({ dbPath: join(dir, "core.sqlite"), storage, real: process.env.LIVE === "1" });
 
 if (action === "post") {
 	w.core.postMessage("main", "incidents", "human:anna", { text: arg, dispatchTo: ["agent:ops"] });
@@ -17,7 +17,21 @@ if (action === "decide") {
 	const d = w.core.openDecisions("main")[0];
 	if (d) w.core.decide("main", d.id, "human:anna", arg || "approve", "ok");
 }
-await new Promise((r) => setTimeout(r, Number(process.env.SETTLE_MS ?? 2500)));
+// Wait until the system is quiet (nothing being written, nothing waiting to be delivered), or - when it is blocked on a
+// person - until that state has been stable for a while. Bounded by SETTLE_MS.
+{
+	const t0 = Date.now();
+	let stableSince = 0, last = "";
+	while (Date.now() - t0 < Number(process.env.SETTLE_MS ?? 6000)) {
+		await new Promise((r) => setTimeout(r, 200));
+		const working = w.core.workingMessages().length, pending = w.core.pendingOutbox().length, open = w.core.openDecisions("main").length;
+		const state = `${working}/${pending}/${open}`;
+		if (state !== last) { last = state; stableSince = Date.now(); }
+		const quiet = working === 0 && pending === 0;
+		const blocked = open > 0 && pending === 0;
+		if (Date.now() - t0 > 600 && Date.now() - stableSince > (quiet ? 600 : blocked ? 3000 : 1e9)) break;
+	}
+}
 
 // What exists, as seen from both sides.
 const summary: any = { agentMessages: [], decisions: 0, cards: 0, works: 0, outbox: [], piConversations: 0, piAssistantEntries: 0, submissionsPerRequest: {} };
@@ -36,7 +50,8 @@ do {
 		let ec: any;
 		do {
 			const ep = await storage.scanEntries({ conversationId: c.id }, 100, ec, ctx);
-			summary.piAssistantEntries += ep.items.filter((e) => e.kind === "pi.assistant").length;
+			summary.piAssistantEntries += ep.items.filter((e) => e.kind === "pi.assistant" && !["aborted", "error"].includes((e as any).model?.[0]?.stopReason)).length;
+			summary.piFailedAttempts = (summary.piFailedAttempts ?? 0) + ep.items.filter((e) => e.kind === "pi.assistant" && ["aborted", "error"].includes((e as any).model?.[0]?.stopReason)).length;
 			ec = ep.next;
 		} while (ec);
 	}

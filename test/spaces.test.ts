@@ -153,3 +153,11 @@ test("a failed post leaves no outbox rows; a delegation queues its wake-up with 
 	const [o] = core.pendingOutbox();
 	assert.deepEqual([o.agentId, o.depth, o.text, o.from], ["agent:dev", 2, "fix it", "agent:ops"]);
 });
+
+test("delegation: one agent run can hand work on only so many times", () => {
+	const { core } = world();
+	const d = (n: number, runId = "run:1") => core.delegate("payments", { spaceId: "general", from: "agent:ops", to: n % 2 ? "agent:dev" : "agent:rev", request: `task ${n}`, requestId: `r${n}-${runId}`, depth: 0, runId });
+	d(1); d(2);
+	assert.equal(code(() => d(3)), "forbidden", "the third hand-over in one run is refused");
+	assert.equal(d(4, "run:2").created, true, "another run has its own allowance");
+});

@@ -14,6 +14,8 @@ export type RealmPolicy = {
 	maxDelegationDepth: number;
 	/** Agent-initiated delegations allowed per space per 10 minutes. */
 	delegationsPer10Min: number;
+	/** How many times one agent run (one answer to one message) may hand work on. Small models fan out blindly without this. */
+	maxDelegationsPerRun: number;
 };
 export type Realm = { id: Id; name: string; kind: RealmKind; policy: RealmPolicy; createdAt: number };
 

@@ -81,3 +81,27 @@ test("live updates are pushed while the agent writes, and the final message equa
 	assert.equal(w.live.at(-1), "echo: @ops stream me", "the last push is the final text");
 	await w.close();
 });
+
+test("images are never dropped silently: a text-only model is told, and so are the people", async () => {
+	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage() });
+	await w.start();
+	w.core.postMessage("main", "incidents", "human:anna", { text: "@ops look at this", dispatchTo: ["agent:ops"], meta: { images: [{ name: "screen.png", mime: "image/png" }] } });
+	await until(() => replies(w.core).some((r: any) => r.status === "done"));
+	const notice = w.core.listMessages("main", "incidents", "human:anna").find((m) => m.kind === "notice" && /NOT sent/.test(m.text))!;
+	assert.match(notice.text, /screen\.png.*does not support images|does not forward image data/);
+	assert.match(replies(w.core)[0].text, /cannot see them/, "the model's input carries the note too");
+	await w.close();
+});
+
+test("a model that fans out ask_agent in one turn is stopped by the per-run limit, through the real tool path", async () => {
+	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage() });
+	await w.start();
+	ask(w.core, "@ops fanout now");
+	await until(() => replies(w.core).some((r: any) => r.status === "done" && r.authorId === "agent:ops"));
+	const dels = w.core.listMessages("main", "incidents", "human:anna").filter((m) => m.kind === "delegation");
+	assert.equal(dels.length, 2, "two hand-overs allowed, the third refused");
+	const act = replies(w.core).find((r: any) => r.authorId === "agent:ops").meta.activity;
+	assert.equal(act.filter((a: any) => a.status === "error").length, 1, "the model saw the refusal as an error result");
+	assert.match(act.find((a: any) => a.status === "error").preview, /already handed work on 2 time/);
+	await w.close();
+});

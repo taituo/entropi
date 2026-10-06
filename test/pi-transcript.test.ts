@@ -66,3 +66,14 @@ test("entries before a context reset stay readable, so the memory keeps what the
 	assert.equal(await mem.sync(thread, new PiTranscript(storage, ctx)), 10, "9 old entries + the one after the reset");
 	assert.match(mem.zoom(thread, "#0.0"), /question 0/);
 });
+
+test("project(): a generation interrupted by a crash (an aborted partial) is not part of the answer", async () => {
+	const { project } = await import("../src/adapters/pi/runtime.ts");
+	const e = (id: number, kind: string, msg: any) => ({ id, conversationId: 1, kind, model: [msg] }) as any;
+	const out = project([
+		e(1, "pi.assistant", { role: "assistant", stopReason: "error", content: [] }),
+		e(2, "pi.assistant", { role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "Connection pools reuse conn" }] }),
+		e(3, "pi.assistant", { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Connection pools reuse connections." }] }),
+	]);
+	assert.equal(out.text, "Connection pools reuse connections.");
+});

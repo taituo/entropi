@@ -77,6 +77,7 @@ export class PiRuntime implements AgentDispatcher {
 			core: this.core, memory: this.memory, viewBytes: this.opts.viewBytes ?? 6000,
 			locate: (id: unknown) => this.locs.get(String(id)),
 			depthOf: (id: unknown) => Number(this.workingReplyOf(String(id))?.meta.depth ?? 0),
+			runOf: (id: unknown) => { const m = this.workingReplyOf(String(id)); return m ? `run:${m.id}` : undefined; },
 			waitDecision: (realm: Id, id: Id, signal?: AbortSignal) => this.waitDecision(realm, id, signal),
 		};
 		registry.install(entropiExtension(host));
@@ -204,11 +205,31 @@ export class PiRuntime implements AgentDispatcher {
 		await this.syncAgent(conv, loc);
 		const sender = core.getActor(o.realmId, o.from)?.name ?? o.from;
 		const space = core.getSpace(o.realmId, o.spaceId)!;
-		const header = `[${space.kind === "dm" ? "private chat" : `#${space.id}`}] ${core.getActor(o.realmId, o.from)?.kind === "agent" ? `@${handleOf(o.from)} (agent)` : sender}: ${o.text}`;
+		let header = `[${space.kind === "dm" ? "private chat" : `#${space.id}`}] ${core.getActor(o.realmId, o.from)?.kind === "agent" ? `@${handleOf(o.from)} (agent)` : sender}: ${o.text}`;
+		header += this.imageNote(o, conv, loc);
 		// 2. Exactly-once on Pi's side: the same requestId always returns the same submission.
 		const sub = await conv.submit({ type: "input", content: header, requestId }, ctx);
 		failpoint("dispatch:after-submit");
 		this.track(reply, sub.id);
+	}
+
+	/**
+	 * Images are never dropped silently. A model that cannot see images is told so (and the people are told too, once), and
+	 * this server does not forward image bytes yet, so for a vision model the note says that instead.
+	 */
+	private imageNote(o: { realmId: Id; spaceId: Id; agentId: Id; messageId: number }, _conv: Conversation, loc: Loc): string {
+		const msg = this.core.getMessage(o.realmId, o.messageId);
+		const imgs = (msg?.meta.images as { name?: string }[] | undefined) ?? [];
+		if (!imgs.length) return "";
+		const ref = this.modelFor(loc);
+		const canSee = !!this.opts.inference.models.getModel(ref.provider, ref.modelId)?.input?.includes("image");
+		const names = imgs.map((i) => i.name ?? "image").join(", ");
+		const why = canSee ? "this server does not forward image data to agents yet" : `the model ${ref.provider}/${ref.modelId} does not support images`;
+		this.core.postMessage(o.realmId, o.spaceId, "system", {
+			kind: "notice", requestId: `noimg:${o.messageId}:${o.agentId}`,
+			text: `${imgs.length} image attachment(s) (${names}) were NOT sent to ${handleOf(o.agentId)}: ${why}. Describe the key details in text instead.`,
+		});
+		return `\n\n[${imgs.length} image attachment(s) (${names}) were shared, but you cannot see them (${why}). Say so briefly and ask for the key details as text instead of guessing.]`;
 	}
 
 	/** Wait for a submission to settle, then make the core's message a pure function of the transcript. */
@@ -330,6 +351,7 @@ export class PiRuntime implements AgentDispatcher {
 					else if (c.type === "message") { live.text.clear(); live.text.set(0, textOf(c.message.content)); }
 				}
 				this.flush(live);
+				if (live.text.size && [...live.text.values()].join("").length > 3) failpoint("stream:mid");
 				break;
 			case "message_end": {
 				const msg = ev.entry?.model?.[0];
@@ -418,6 +440,9 @@ export function project(entries: readonly EntryRecord[]): { text: string; activi
 		const msg: any = e.model?.[0];
 		if (!msg) continue;
 		if (e.kind === "pi.assistant") {
+			// A generation that was interrupted (process killed mid-stream) or failed is kept by Pi as an `aborted`/`error`
+			// entry and then retried. Its partial text is not part of the answer.
+			if (msg.stopReason === "aborted" || msg.stopReason === "error") continue;
 			const t = textOf(msg.content).trim();
 			if (t) texts.push(t);
 			for (const b of msg.content ?? []) if (b.type === "toolCall") steps.set(b.id, { id: b.id, name: b.name, args: short(b.arguments, 220), status: "running" });

@@ -9,7 +9,7 @@ import type {
 export const SYSTEM: Id = "system";
 const WORK_STATES: WorkState[] = ["queued", "working", "waiting", "blocked", "failed", "done", "cancelled"];
 const TERMINAL: WorkState[] = ["done", "cancelled"];
-const DEFAULT_POLICY: RealmPolicy = { separationOfDuties: true, autonomy: "low", maxDelegationDepth: 3, delegationsPer10Min: 8 };
+const DEFAULT_POLICY: RealmPolicy = { separationOfDuties: true, autonomy: "low", maxDelegationDepth: 3, delegationsPer10Min: 8, maxDelegationsPerRun: 2 };
 /** Built-in roles are a ladder (an approver is also an operator); any other role must match exactly. */
 const RANK: Record<string, number> = { viewer: 0, operator: 1, approver: 2, admin: 3 };
 export const hasRole = (a: Pick<Actor, "roles">, role: string): boolean =>
@@ -603,7 +603,7 @@ export class Core {
 	 * present, bounded depth, no repeating the same ask, and a rate limit per space. All counted from the event log, so
 	 * limits survive restarts and replays are idempotent per requestId.
 	 */
-	delegate(realmId: Id, o: { spaceId: Id; from: Id; to: Id; request: string; requestId: string; depth?: number }): { created: boolean; depth: number; messageId: number | null } {
+	delegate(realmId: Id, o: { spaceId: Id; from: Id; to: Id; request: string; requestId: string; depth?: number; runId?: string }): { created: boolean; depth: number; messageId: number | null } {
 		return this.tx(() => {
 			const realm = this.realm(realmId);
 			const from = this.actor(realmId, o.from);
@@ -619,12 +619,16 @@ export class Core {
 			const dup = this.db.prepare("SELECT 1 FROM events WHERE realm_id = ? AND type = 'delegation.requested' AND json_extract(data, '$.requestId') = ?").get(realmId, o.requestId);
 			if (dup) return { created: false, depth: depth + 1, messageId: (this.db.prepare("SELECT id FROM messages WHERE realm_id = ? AND request_id = ?").get(realmId, `delegate:${o.requestId}`) as Row | undefined)?.id ?? null };
 			if (depth >= realm.policy.maxDelegationDepth) throw forbidden(`delegation depth limit (${realm.policy.maxDelegationDepth}) reached. Do not ask other agents again: summarize what is known and blocked, and let a human decide.`);
+			if (o.runId) {
+				const used = (this.db.prepare("SELECT COUNT(*) n FROM events WHERE realm_id = ? AND type = 'delegation.requested' AND json_extract(data, '$.runId') = ?").get(realmId, o.runId) as Row).n as number;
+				if (used >= realm.policy.maxDelegationsPerRun) throw forbidden(`you already handed work on ${used} time(s) in this turn (limit ${realm.policy.maxDelegationsPerRun}). Stop delegating: summarize what you know and what is blocked, and let a human decide.`);
+			}
 			const hash = `${to.id}:${o.request.trim().toLowerCase().slice(0, 160)}`;
 			const since = this.now() - 600_000;
 			const recent = this.db.prepare("SELECT data FROM events WHERE realm_id = ? AND type = 'delegation.requested' AND ts >= ? AND json_extract(data, '$.spaceId') = ?").all(realmId, since, o.spaceId) as Row[];
 			if (recent.some((r) => JSON.parse(r.data).hash === hash)) throw conflict(`@${handleOf(to.id)} was already asked the same thing recently; wait for the answer instead of repeating it`);
 			if (recent.length >= realm.policy.delegationsPer10Min) throw forbidden("delegation limit reached in this space; ask a human to continue");
-			this.emit(realmId, "delegation.requested", from.id, "space", o.spaceId, { spaceId: o.spaceId, to: to.id, depth: depth + 1, hash, requestId: o.requestId });
+			this.emit(realmId, "delegation.requested", from.id, "space", o.spaceId, { spaceId: o.spaceId, to: to.id, depth: depth + 1, hash, requestId: o.requestId, runId: o.runId ?? null });
 			// The hand-over is a message people can read, and the wake-up is queued in the same transaction.
 			const { message } = this.postMessage(realmId, o.spaceId, from.id, {
 				kind: "delegation", text: o.request, meta: { to: handleOf(to.id), toId: to.id, requestId: o.requestId }, requestId: `delegate:${o.requestId}`, dispatchTo: [to.id], depth: depth + 1,
