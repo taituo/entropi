@@ -28,11 +28,18 @@ const userText = (ctx: any) => {
  *   "@... delegate" -> calls ask_agent(developer), then says it asked
  *   anything else   -> answers "echo: <text>"
  */
-export function scriptedModel() {
+export function makeGate() {
+	let release!: () => void;
+	const p = new Promise<void>((r) => (release = r));
+	return { p, release };
+}
+
+export function scriptedModel(gate = makeGate()) {
 	const faux = fauxProvider({ provider: "faux", models: [{ id: "scripted", input: ["text"] }] } as any);
-	const step = async (ctx: any) => {
+	const step = async (ctx: any, options?: any) => {
 		faux.appendResponses([step]); // a pure function of the transcript: always ready for the next call
 		const text = userText(ctx);
+		if (/\bHOLD\b/.test(text) && lastRole(ctx) !== "toolResult") await Promise.race([gate.p, new Promise((_, rej) => options?.signal?.addEventListener("abort", () => rej(new Error("aborted")), { once: true }))]); // blocks until released, but honours abort like a real provider
 		const mine = lastRole(ctx);
 		if (mine === "toolResult") {
 			const r: any = ctx.messages.at(-1);
@@ -41,7 +48,8 @@ export function scriptedModel() {
 		}
 		if (/\bapprove\b/.test(text)) return fauxAssistantMessage([fauxToolCall("request_approval", { action: "Apply POOL_SIZE=4", target: "checkout-api", reason: "pool size is 0" })], { stopReason: "toolUse" });
 		if (/\bfanout\b/.test(text)) return fauxAssistantMessage(["developer", "reviewer", "insight"].map((a, i) => fauxToolCall("ask_agent", { agent: a, request: `task ${i} for ${a}` }, { id: `fan${i}` })), { stopReason: "toolUse" });
-		if (/\bdelegate\b/.test(text)) return fauxAssistantMessage([fauxToolCall("ask_agent", { agent: "developer", request: "please fix the pool size" })], { stopReason: "toolUse" });
+		if (/\bconsult\b/.test(text)) return fauxAssistantMessage([fauxToolCall("consult", { question: /HOLDHELPER/.test(text) ? "HOLD question" : "what is the answer" })], { stopReason: "toolUse" });
+		if (/\bdelegate\b/.test(text)) return fauxAssistantMessage([fauxToolCall("ask_agent", { agent: "developer", request: /HOLDDEV/.test(text) ? "HOLD: please fix the pool size" : "please fix the pool size" })], { stopReason: "toolUse" });
 		return fauxAssistantMessage([fauxText(`echo: ${text.replace(/^\[[^\]]*\]\s*[^:]*:\s*/, "")}`)]);
 	};
 	faux.setResponses([step as any]);
@@ -53,12 +61,13 @@ export async function makeWorld(o: { dbPath: string; storage: Storage; real?: bo
 	const core = new Core(openDb(o.dbPath));
 	seedRealm(core, "main");
 	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] });
-	const faux = scriptedModel();
+	const gate = makeGate();
+	const faux = scriptedModel(gate);
 	const inference = o.real
 		? buildInference(inferenceFromEnv(process.env))
 		: buildInference({ airgapped: true, defaultModel: "faux/scripted", perAgent: {} }, [{ id: "faux", provider: faux.provider }]);
 	const live: string[] = [];
 	const runtime = new PiRuntime({ core, storage: o.storage, inference, live: (m) => live.push(m.text), ...o.runtime });
 	const pump = new DispatchPump(core, runtime);
-	return { core, runtime, pump, faux, live, start: async () => { await runtime.start(); pump.start(); }, close: async () => { pump.stop(); await runtime.close(); } };
+	return { core, runtime, pump, faux, gate, live, start: async () => { await runtime.start(); pump.start(); }, close: async () => { pump.stop(); await runtime.close(); } };
 }

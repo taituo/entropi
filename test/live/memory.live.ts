@@ -35,7 +35,7 @@ test("3. OptChat with a real summariser and Pi compaction: an early fact survive
 	const first = w.core.db.prepare("SELECT text FROM memnodes WHERE thread = ? AND level = 1 AND idx = 0").get(thread) as any;
 	obs("3 first node keeps the early fact?", { text: first?.text, hasCodename: /BLUEHERON/.test(first?.text ?? ""), hasIncident: /4417/.test(first?.text ?? "") });
 
-	const c = await w.runtime.compact("main", "incidents", "agent:ops");
+	const c = await w.runtime.compact({ realmId: "main", spaceId: "incidents", agentId: "agent:ops", by: "human:anna" });
 	obs("3 compact result", c);
 	const comp: any[] = [];
 	const page = await storage.scanEntries({ conversationId: Number(thread) as any }, 200, undefined, ctx);

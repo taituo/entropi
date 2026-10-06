@@ -105,3 +105,69 @@ test("a model that fans out ask_agent in one turn is stopped by the per-run limi
 	assert.match(act.find((a: any) => a.status === "error").preview, /already handed work on 2 time/);
 	await w.close();
 });
+
+const ctlOf = (by = "human:anna") => ({ realmId: "main", spaceId: "incidents", by });
+
+test("stop: aborts the running answer, which says so; late model output changes nothing", async () => {
+	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage() });
+	await w.start();
+	ask(w.core, "@ops HOLD this one");
+	await until(() => replies(w.core).length === 1 && w.core.workingMessages().length === 1 && w.faux.state.callCount >= 1);
+	const r = await w.runtime.stop({ ...ctlOf(), agentId: "agent:ops" });
+	assert.ok(r.stopped >= 1);
+	await until(() => replies(w.core)[0].status === "done");
+	assert.match(replies(w.core)[0].text, /Stopped/);
+	w.gate.release(); // the "model" finally answers; nobody is listening any more
+	await new Promise((x) => setTimeout(x, 300));
+	assert.equal(replies(w.core).length, 1);
+	assert.match(replies(w.core)[0].text, /Stopped/);
+	assert.ok(w.core.events("main").some((e) => e.type === "agent.stopped"), "the stop is on the record");
+	await w.close();
+});
+
+test("stop follows an ask_agent chain: the colleague that got the work stops too, and queued hand-overs are withdrawn", async () => {
+	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage() });
+	await w.start();
+	ask(w.core, "@ops delegate this HOLDDEV");
+	await until(() => w.core.listMessages("main", "incidents", "human:anna").some((m) => m.kind === "agent" && m.authorId === "agent:developer" && m.status === "working"));
+	assert.ok(replies(w.core).find((m: any) => m.authorId === "agent:ops").status === "done", "ops itself finished after handing over");
+	const dev = w.core.listMessages("main", "incidents", "human:anna").find((m) => m.authorId === "agent:developer" && m.kind === "agent")!;
+	assert.equal(String(dev.meta.parentRun).startsWith("run:"), true, "the reply knows which run started it");
+	const r = await w.runtime.stop({ ...ctlOf(), agentId: "agent:ops" }); // stop the one who handed over
+	assert.ok(r.stopped >= 1);
+	await until(() => w.core.getMessage("main", dev.id)!.status === "done");
+	assert.match(w.core.getMessage("main", dev.id)!.text, /Stopped/);
+	w.gate.release();
+	await w.close();
+});
+
+test("consult: a hidden helper is a Pi subagent owned by the tool call (not a visible colleague)", async () => {
+	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage() });
+	await w.start();
+	ask(w.core, "@ops consult the helper");
+	await until(() => replies(w.core).some((r: any) => r.status === "done"));
+	assert.match(replies(w.core)[0].text, /done: echo: what is the answer/);
+	assert.equal(w.core.listMessages("main", "incidents", "human:anna").filter((m) => m.kind === "delegation").length, 0, "nothing visible was handed over");
+	assert.equal(replies(w.core)[0].meta.activity[0].name, "consult");
+	let owned = 0;
+	const { BACKGROUND_CONTEXT: ctx } = await import("@earendil-works/chord/context");
+	const page = await w.runtime.storage.scanConversations({}, 50, undefined, ctx);
+	for (const c of page.items) if (c.owner) owned++;
+	assert.equal(owned, 1, "the helper conversation is owned by a task");
+	await w.close();
+});
+
+test("consult: stopping the parent stops the helper it owns (Pi's own abort cascade)", async () => {
+	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage() });
+	await w.start();
+	ask(w.core, "@ops consult HOLDHELPER");
+	await until(() => w.faux.state.callCount >= 2); // the helper is now blocked inside the gate
+	await w.runtime.stop({ ...ctlOf(), agentId: "agent:ops" });
+	await until(() => replies(w.core)[0].status === "done");
+	assert.match(replies(w.core)[0].text, /Stopped/);
+	const { BACKGROUND_CONTEXT: ctx } = await import("@earendil-works/chord/context");
+	const subs = await w.runtime.storage.scanSubmissions({}, 50, undefined, ctx);
+	assert.ok(subs.items.every((s) => s.status !== "placed" && s.status !== "queued"), "nothing is left running, helper included");
+	w.gate.release();
+	await w.close();
+});

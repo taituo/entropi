@@ -13,14 +13,15 @@ import { seedRealm } from "./seed.ts";
 
 const core = new Core(openDb(join(config.dataDir, "entropi.sqlite")));
 seedRealm(core, config.defaultRealm);
-const app = createApp({ core, config });
+// The runtime needs the app's live push, so the app asks for the runtime lazily.
+let runtime: PiRuntime | undefined;
+const app = createApp({ core, config, control: () => runtime });
 const live = (m: import("./core/types.ts").Message) => app.hub.live({ realmId: m.realmId, spaceId: m.spaceId, type: "message", message: m });
 
 // Models: a local OpenAI-compatible endpoint first (works fully airgapped); cloud providers only when explicitly
 // configured and AIRGAPPED is not set. With no model configured at all, scripted demo agents stand in.
 const inferenceCfg = inferenceFromEnv(process.env);
 const inference = buildInference(inferenceCfg);
-let runtime: PiRuntime | undefined;
 let dispatcher;
 if (inference.providers.length) {
 	runtime = new PiRuntime({ core, storage: await openNodeSqliteStorage(join(config.dataDir, "pi.sqlite")), inference, live, images: createUploads(join(config.dataDir, "uploads")) });

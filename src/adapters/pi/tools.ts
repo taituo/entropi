@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { CompactionTask, defineExtension, defineTool, hook } from "@earendil-works/pi-durable";
+import { AssistantEntry, CompactionTask, configure, defineExtension, defineTool, hook } from "@earendil-works/pi-durable";
 import { handleOf } from "../../core/core.ts";
 import { failpoint } from "../../runtime/failpoint.ts";
 import type { Core } from "../../core/core.ts";
@@ -12,10 +12,10 @@ export interface ToolHost {
 	memory: OptChat;
 	viewBytes: number;
 	locate(conversationId: unknown): { realmId: Id; spaceId: Id; agentId: Id } | undefined;
-	/** Hops from the human message that started the run this conversation is in. Read from the core, so it survives restarts. */
-	depthOf(conversationId: unknown): number;
-	/** Identity of the run in progress (the agent message being written), to bound how often it can delegate. */
-	runOf(conversationId: unknown): string | undefined;
+	/** The run in progress in this conversation (read from Pi's placed submission, so it is right even with queued follow-ups). */
+	currentRun(conversationId: unknown): Promise<{ runId: string; depth: number } | undefined>;
+	/** Model for hidden helper work, normally a cheap one. */
+	consultModel(conversationId: unknown): { provider: string; modelId: string } | undefined;
 	waitDecision(realmId: Id, decisionId: Id, signal?: AbortSignal): Promise<DecisionRequest>;
 }
 
@@ -46,7 +46,8 @@ export function entropiExtension(host: ToolHost) {
 				const handle = args.agent.toLowerCase().replace(/^@/, "");
 				const to = space.agentIds.find((id) => handleOf(id) === handle);
 				if (!to) throw new Error(`no agent "${args.agent}" in this space. Present: ${space.agentIds.map(handleOf).join(", ")}`);
-				const r = core.delegate(loc.realmId, { spaceId: loc.spaceId, from: loc.agentId, to, request: args.request, requestId: `ask:${api.taskId}`, depth: host.depthOf(api.conversationId), runId: host.runOf(api.conversationId) });
+				const run = await host.currentRun(api.conversationId);
+				const r = core.delegate(loc.realmId, { spaceId: loc.spaceId, from: loc.agentId, to, request: args.request, requestId: `ask:${api.taskId}`, depth: run?.depth ?? 0, runId: run?.runId });
 				return text(`${r.created ? "Asked" : "Already asked"} @${handle}. Their answer will appear in the space.`);
 			} catch (e) {
 				return fail(e);
@@ -104,9 +105,40 @@ export function entropiExtension(host: ToolHost) {
 		},
 	});
 
-	return defineExtension({
+	// Hidden helper work, as opposed to ask_agent's visible hand-over to a colleague: a Pi subagent. The child conversation is
+	// owned by this tool call's task, so stopping the parent stops the helper; a rerun after a crash finds the same child.
+	const consult = defineTool({
+		name: "consult",
+		description: "Ask a private helper a self-contained question (it has no tools and no memory of this chat) and get its answer back. Use it for side work such as summarising or classifying text. It is not visible to people.",
+		parameters: Type.Object({ question: Type.String({ description: "Everything the helper needs, in one message" }) }),
+		replay: "safe",
+		execute: async (args, api, context) => {
+			try {
+				const model = host.consultModel(api.conversationId);
+				const child = await api.commit(async (tx) => {
+					const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
+					if (existing !== undefined) return existing.id;
+					const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+					await configure(tx, created.id, { ...(model ? { model } : {}), extensions: { remove: [extension] }, instructions: "You are a helper. Answer the question briefly and exactly. You have no tools." });
+					return created.id;
+				}, context);
+				await api.details({ conversationId: child }, context);
+				const handle = await api.conversation(child, context);
+				if (!handle) throw new Error("helper conversation vanished");
+				const settled = await (await handle.submit({ type: "input", content: args.question, requestId: `sub:${api.taskId}` }, context)).wait(context);
+				if (settled.status !== "done" || settled.type !== "input") return fail(new Error(`the helper did not answer (${settled.status})`));
+				const entry = await api.commit((tx) => tx.entry(AssistantEntry, settled.answer), context);
+				const t = (entry?.model?.[0] as any)?.content?.filter((b: any) => b.type === "text").map((b: any) => b.text).join("") ?? "";
+				return text(t || "(the helper returned nothing)");
+			} catch (e) {
+				return fail(e);
+			}
+		},
+	});
+
+	const extension: ReturnType<typeof defineExtension> = defineExtension({
 		name: "entropi",
-		tools: [askAgent, requestApproval, memoryZoom],
+		tools: [askAgent, requestApproval, memoryZoom, consult],
 		hooks: [
 			// When Pi compacts the context, replace its linear summary with the OptChat view of everything before the kept tail:
 			// recent messages verbatim, older ones ever coarser, every line zoomable.
@@ -120,4 +152,5 @@ export function entropiExtension(host: ToolHost) {
 			}),
 		] as any,
 	});
+	return extension;
 }

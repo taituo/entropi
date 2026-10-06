@@ -589,6 +589,16 @@ export class Core {
 		return undefined;
 	}
 
+	// ------------------------------------------------------------------ audit
+
+	/** Record something a person or system did that is not a state change by itself (stop, compact...). */
+	record(realmId: Id, by: Id, type: string, subjectKind: string, subjectId: Id, data: Record<string, unknown> = {}): ActivityEvent {
+		return this.tx(() => {
+			this.actor(realmId, by);
+			return this.emit(realmId, type, by, subjectKind, subjectId, data);
+		});
+	}
+
 	// ------------------------------------------------------------------ outbox
 
 	private queueOutbox(realmId: Id, messageId: number, agentId: Id, depth: number) {
@@ -615,6 +625,14 @@ export class Core {
 	findMessage(messageId: number): Message | undefined {
 		const r = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(messageId) as Row | undefined;
 		return r ? rowToMessage(r) : undefined;
+	}
+
+	/** Withdraw hand-overs that were queued by one run (stop propagating down a delegation chain). Returns how many. */
+	cancelOutboxFromRun(runId: string, reason: string): number {
+		const rows = this.db.prepare(`SELECT o.id FROM outbox o JOIN messages m ON m.realm_id = o.realm_id AND m.id = o.message_id
+			WHERE o.status = 'pending' AND json_extract(m.meta, '$.runId') = ?`).all(runId) as Row[];
+		for (const r of rows) this.markOutbox(r.id, "failed", reason);
+		return rows.length;
 	}
 
 	/** Agent messages still being written: what a restarted runtime has to pick up again. */
@@ -657,7 +675,7 @@ export class Core {
 			this.emit(realmId, "delegation.requested", from.id, "space", o.spaceId, { spaceId: o.spaceId, to: to.id, depth: depth + 1, hash, requestId: o.requestId, runId: o.runId ?? null });
 			// The hand-over is a message people can read, and the wake-up is queued in the same transaction.
 			const { message } = this.postMessage(realmId, o.spaceId, from.id, {
-				kind: "delegation", text: o.request, meta: { to: handleOf(to.id), toId: to.id, requestId: o.requestId }, requestId: `delegate:${o.requestId}`, dispatchTo: [to.id], depth: depth + 1,
+				kind: "delegation", text: o.request, meta: { to: handleOf(to.id), toId: to.id, requestId: o.requestId, runId: o.runId ?? null }, requestId: `delegate:${o.requestId}`, dispatchTo: [to.id], depth: depth + 1,
 			});
 			return { created: true, depth: depth + 1, messageId: message.id };
 		});

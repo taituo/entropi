@@ -4,6 +4,7 @@ import { handleOf, hasRole } from "../core/core.ts";
 import { CoreError } from "../core/errors.ts";
 import type { ActivityEvent, Actor, Id, Message, Space } from "../core/types.ts";
 import type { Config } from "../config.ts";
+import type { AgentControl } from "../core/ports.ts";
 import type { Hub } from "./sse.ts";
 import { MAX_IMAGE, MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_BYTES_PER_MESSAGE, type Uploads } from "./uploads.ts";
 import type { User } from "./auth.ts";
@@ -74,7 +75,7 @@ export function eventView(core: Core, e: ActivityEvent): { type: string; payload
 	return { type: "event", payload: e };
 }
 
-export type Deps = { core: Core; hub: Hub; uploads: Uploads; config: Pick<Config, "brand" | "defaultRealm"> };
+export type Deps = { core: Core; hub: Hub; uploads: Uploads; control?: () => AgentControl | undefined; config: Pick<Config, "brand" | "defaultRealm"> };
 
 /** All routes live under /api/realms/:realm; a person who is not a member gets 404, never 403. */
 export async function api(req: IncomingMessage, res: ServerResponse, url: URL, user: User, d: Deps) {
@@ -155,6 +156,28 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 		const { message } = core.postMessage(realmId, spaceId, me.id, { text, dispatchTo: targets, meta: atts.length ? { images: atts.map((a) => ({ id: a!.id, name: a!.name, mime: a!.mime, size: a!.size })) } : {} });
 		for (const id of absent) core.postMessage(realmId, spaceId, "system", { kind: "notice", text: `${handleOf(id)} is not in #${space.id}. Agents here: ${space.agentIds.map(handleOf).join(", ")}.` });
 		return json(res, 200, { message, dispatchedTo: targets });
+	}
+
+	if ((r = /^\/spaces\/([\w-]+)\/agents\/([\w-]+)\/(stop|compact|memtree)$/.exec(rest))) {
+		const space = core.getSpace(realmId, r[1]);
+		if (!space || !core.canSee(realmId, me.id, space.id)) throw httpError(404, "no such space");
+		const agentId = space.agentIds.find((id) => handleOf(id) === r![2].toLowerCase());
+		if (!agentId) throw httpError(404, "no such agent in this space");
+		const ctl = d.control?.();
+		if (!ctl) throw httpError(501, "no model runtime is connected (the scripted demo cannot do this)");
+		const o = { realmId, spaceId: space.id, agentId, by: me.id };
+		if (m === "GET" && r[3] === "memtree") return json(res, 200, ctl.memtree(o));
+		if (m === "POST" && r[3] !== "memtree") {
+			if (!hasRole(me, "operator")) throw httpError(403, "operators only");
+			return json(res, 200, r[3] === "stop" ? await ctl.stop(o) : await ctl.compact(o));
+		}
+	}
+
+	if (m === "GET" && rest === "/usage") {
+		if (!hasRole(me, "approver")) throw httpError(403, "approvers only");
+		const ctl = d.control?.();
+		if (!ctl) throw httpError(501, "no model runtime is connected");
+		return json(res, 200, { usage: await ctl.usage() });
 	}
 
 	if (m === "POST" && rest === "/spaces") {

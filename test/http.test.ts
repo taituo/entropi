@@ -18,7 +18,14 @@ core.createSpace("main", { id: "general", kind: "standing", name: "general", age
 const dispatched: any[] = [];
 const dispatcher: AgentDispatcher = { async dispatch(o) { dispatched.push(o); } };
 const cfg = { ...config, auth: { ...config.auth, mode: "dev" as const }, defaultRealm: "main" };
-const app = createApp({ core, config: cfg });
+const controlCalls: any[] = [];
+const control = {
+	stop: async (o: any) => { controlCalls.push(["stop", o.agentId, o.by]); return { stopped: 1 }; },
+	compact: async (o: any) => { controlCalls.push(["compact", o.agentId]); return { compacted: true }; },
+	memtree: () => ({ leaves: 3, nodes: 1, llmNodes: 1, pending: 0, viewBytes: 6000, view: [] }),
+	usage: async () => ({ models: {}, tools: {} }),
+};
+const app = createApp({ core, config: cfg, control: () => control });
 const pump = new DispatchPump(core, dispatcher);
 pump.start();
 await new Promise<void>((r) => app.server.listen(0, r));
@@ -176,4 +183,19 @@ test("an image shared in a private chat is invisible to everybody else", async (
 	assert.equal((await fetch(`${base}/api/realms/main/files/${att.id}`, { headers: { cookie: alice } })).status, 200);
 	assert.equal((await fetch(`${base}/api/realms/main/files/${att.id}`, { headers: { cookie: bob } })).status, 404);
 	assert.equal((await upload(bob, dm.body.space.id, PNG)).status, 404);
+});
+
+test("stop, compact, memory view and usage: who may, and only for agents you can see", async () => {
+	const stop = (c: string, space: string, agent: string) => call(c, "POST", `/api/realms/main/spaces/${space}/agents/${agent}/stop`, {});
+	assert.equal((await stop(carol, "general", "ops")).status, 403, "viewers cannot stop");
+	const ok = await stop(bob, "general", "ops");
+	assert.deepEqual([ok.status, ok.body.stopped], [200, 1]);
+	assert.deepEqual(controlCalls.at(-1), ["stop", "agent:ops", "human:dev-bob"]);
+	assert.equal((await stop(bob, "general", "developer")).status, 404, "developer is not in #general in this test realm");
+	assert.equal((await call(bob, "POST", "/api/realms/main/spaces/general/agents/ops/compact", {})).body.compacted, true);
+	assert.equal((await call(carol, "GET", "/api/realms/main/spaces/general/agents/ops/memtree")).body.leaves, 3, "anyone who sees the space can look at the memory view");
+	const dm = (await call(alice, "POST", "/api/realms/main/dms", { agent: "ops" })).body.space.id;
+	assert.equal((await stop(bob, dm, "ops")).status, 404, "nobody else can reach into a private chat");
+	assert.equal((await call(bob, "GET", "/api/realms/main/usage")).status, 403);
+	assert.deepEqual((await call(alice, "GET", "/api/realms/main/usage")).body.usage, { models: {}, tools: {} });
 });

@@ -30,3 +30,15 @@ export interface TranscriptSource {
 export interface AgentDispatcher {
 	dispatch(o: { realmId: Id; spaceId: Id; agentId: Id; text: string; from: Id; messageId: number; depth?: number }): Promise<void>;
 }
+
+/** What a UI can ask of a running agent runtime beyond waking it. Optional: a runtime that cannot do something says so. */
+export interface AgentControl {
+	/** Stop an agent in a space, and everything it handed on to other agents from the run in progress. */
+	stop(o: { realmId: Id; spaceId: Id; agentId: Id; by: Id }): Promise<{ stopped: number }>;
+	/** Compress the agent's context with the memory tree. */
+	compact(o: { realmId: Id; spaceId: Id; agentId: Id; by: Id }): Promise<{ compacted: boolean }>;
+	/** The compressed memory view and tree size of one agent in one space. */
+	memtree(o: { realmId: Id; spaceId: Id; agentId: Id }): { leaves: number; nodes: number; llmNodes: number; pending: number; viewBytes: number; view: { id: string; msgs: number; role: string | null; text: string }[] };
+	/** Token and cost totals, as the runtime itself counts them. */
+	usage(): Promise<unknown>;
+}

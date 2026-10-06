@@ -3,7 +3,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, watchEvents, type Conversation, type EntryRecord, type Extension, type Storage, type SubmissionId } from "@earendil-works/pi-durable";
 import { handleOf } from "../../core/core.ts";
 import type { Core } from "../../core/core.ts";
-import type { AgentDispatcher } from "../../core/ports.ts";
+import type { AgentControl, AgentDispatcher } from "../../core/ports.ts";
 import { OptChat, SUMMARY_SYSTEM, TreeBuilder } from "../../core/optchat.ts";
 import type { DecisionRequest, Id, Message } from "../../core/types.ts";
 import { Binding, bindingKey } from "./binding.ts";
@@ -46,7 +46,7 @@ export type PiRuntimeOptions = {
  *   2. projection: Pi transcript   --(requestId reply:<id>:<agent>)-->  the agent's message in the core (rebuildable)
  *   3. tools:     Pi task id       --(keys ap:/ask:<taskId>)-->        decisions and delegations in the core
  */
-export class PiRuntime implements AgentDispatcher {
+export class PiRuntime implements AgentDispatcher, AgentControl {
 	readonly core: Core;
 	readonly storage: Storage;
 	readonly memory: OptChat;
@@ -78,8 +78,8 @@ export class PiRuntime implements AgentDispatcher {
 		const host = {
 			core: this.core, memory: this.memory, viewBytes: this.opts.viewBytes ?? 6000,
 			locate: (id: unknown) => this.locs.get(String(id)),
-			depthOf: (id: unknown) => Number(this.workingReplyOf(String(id))?.meta.depth ?? 0),
-			runOf: (id: unknown) => { const m = this.workingReplyOf(String(id)); return m ? `run:${m.id}` : undefined; },
+			currentRun: (id: unknown) => this.currentRun(String(id)),
+			consultModel: (id: unknown) => { const loc = this.locs.get(String(id)); return this.opts.inference.summarizer() ?? (loc ? this.modelFor(loc) : undefined); },
 			waitDecision: (realm: Id, id: Id, signal?: AbortSignal) => this.waitDecision(realm, id, signal),
 		};
 		registry.install(entropiExtension(host));
@@ -139,8 +139,21 @@ export class PiRuntime implements AgentDispatcher {
 		return this.locs.get(String(conversationId));
 	}
 
-	private workingReplyOf(thread: string): Message | undefined {
-		return this.core.workingMessages().filter((m) => (m.meta.pi as any)?.thread === thread).at(-1);
+	/**
+	 * The agent message whose run is going on in this conversation. Pi knows which submissions are placed (being worked
+	 * on); their request ids name our reply rows. With queued follow-ups there are several working replies, but only the
+	 * placed submission is the run in progress.
+	 */
+	private async currentRun(thread: string): Promise<{ runId: string; depth: number; message: Message } | undefined> {
+		const page = await this.storage.scanSubmissions({ conversationId: Number(thread) as any, status: "placed" }, 10, undefined, ctx);
+		for (const rec of page.items) {
+			const m = /^msg:(\d+):(.+)$/.exec(rec.requestId ?? "");
+			if (!m) continue;
+			const row = this.core.db.prepare("SELECT id, realm_id FROM messages WHERE request_id = ?").get(`reply:${m[1]}:${m[2]}`) as { id: number; realm_id: string } | undefined;
+			const msg = row && this.core.getMessage(row.realm_id, row.id);
+			if (msg) return { runId: `run:${msg.id}`, depth: Number(msg.meta.depth ?? 0), message: msg };
+		}
+		return undefined;
 	}
 
 	private instructionsFor(loc: Loc): string {
@@ -200,7 +213,7 @@ export class PiRuntime implements AgentDispatcher {
 		// 1. The reply row exists before Pi is told anything, so a half-done hand-over is always visible and recoverable.
 		const { message: reply } = core.postMessage(o.realmId, o.spaceId, o.agentId, {
 			text: "", status: "working", requestId: `reply:${o.messageId}:${o.agentId}`,
-			meta: { pi: { thread: String(conv.id), requestId }, depth: o.depth ?? 0, activity: [] },
+			meta: { pi: { thread: String(conv.id), requestId }, depth: o.depth ?? 0, activity: [], parentRun: (core.getMessage(o.realmId, o.messageId)?.meta.runId as string | undefined) ?? null },
 		});
 		failpoint("dispatch:after-reply");
 		if (reply.status === "done") return; // delivered and answered before; a redelivery has nothing left to do
@@ -418,18 +431,69 @@ export class PiRuntime implements AgentDispatcher {
 		});
 	}
 
-	async stop(realmId: Id, spaceId: Id, agentId: Id) {
-		const conv = this.convs.get(bindingKey({ realm: realmId, space: spaceId, agent: agentId }));
-		if (conv) await conv.abort(ctx);
+	// ------------------------------------------------------------------ control (stop, compact, memory, usage)
+
+	/**
+	 * Stop an agent in a space and whatever it handed on. Pi's abort cascades to work a task OWNS (its tools, its subagent
+	 * helpers), but a visible hand-over to a colleague (ask_agent) is another agent's own conversation, so the chain is
+	 * followed through the delegation links the core records: every reply started from this run is stopped too, and
+	 * hand-overs still waiting in the outbox are withdrawn.
+	 */
+	async stop(o: { realmId: Id; spaceId: Id; agentId: Id; by: Id }): Promise<{ stopped: number }> {
+		const seen = new Set<number>();
+		const stopReply = async (reply: Message): Promise<number> => {
+			if (seen.has(reply.id)) return 0;
+			seen.add(reply.id);
+			const pi = reply.meta.pi as { thread?: string; requestId?: string } | undefined;
+			let n = 0;
+			if (pi?.thread && pi.requestId) {
+				const rec = await this.storage.submissionByRequest(Number(pi.thread) as any, pi.requestId, ctx);
+				if (rec) {
+					const r = await this.harness.abortSubmission(rec.id, ctx, Number(pi.thread) as any);
+					if (r === "already_placed") await (await this.harness.conversation(Number(pi.thread) as any, ctx))?.abort(ctx);
+					if (r === "aborted" || r === "already_placed") n++;
+				}
+			}
+			this.core.cancelOutboxFromRun(`run:${reply.id}`, "stopped");
+			for (const child of this.core.workingMessages().filter((m) => m.meta.parentRun === `run:${reply.id}`)) n += await stopReply(child);
+			return n;
+		};
+		const conv = this.convs.get(bindingKey({ realm: o.realmId, space: o.spaceId, agent: o.agentId }));
+		let stopped = 0;
+		if (conv) {
+			// Working replies are stopped; finished ones may still have colleagues working on what they handed over.
+			const rows = this.core.db.prepare("SELECT realm_id, id FROM messages WHERE kind = 'agent' AND json_extract(meta, '$.pi.thread') = ? ORDER BY id DESC LIMIT 20").all(String(conv.id)) as { realm_id: string; id: number }[];
+			for (const row of rows) { const r = this.core.getMessage(row.realm_id, row.id); if (r) stopped += await stopReply(r); }
+			await conv.abort(ctx); // also withdraws anything still queued and aborts owned helper conversations
+		}
+		this.core.record(o.realmId, o.by, "agent.stopped", "actor", o.agentId, { spaceId: o.spaceId, stopped });
+		return { stopped };
 	}
 
-	/** Compress an agent's context with the OptChat view of its whole history (manual trigger for the UI). */
-	async compact(realmId: Id, spaceId: Id, agentId: Id): Promise<{ compacted: boolean }> {
-		const conv = this.convs.get(bindingKey({ realm: realmId, space: spaceId, agent: agentId }));
+	/** Compress an agent's context with the OptChat view of its whole history. */
+	async compact(o: { realmId: Id; spaceId: Id; agentId: Id; by: Id }): Promise<{ compacted: boolean }> {
+		const conv = this.convs.get(bindingKey({ realm: o.realmId, space: o.spaceId, agent: o.agentId }));
 		if (!conv) return { compacted: false };
 		const id = await conv.compact("Replace the earlier history with the compressed memory view.", ctx);
 		const done = (await this.harness.waitForTask(id, ctx)).state as any;
-		return { compacted: done.outcome?.status === "completed" && done.outcome?.result?.submissionId !== undefined };
+		const compacted = done.outcome?.status === "completed" && done.outcome?.result?.submissionId !== undefined;
+		this.core.record(o.realmId, o.by, "agent.compacted", "actor", o.agentId, { spaceId: o.spaceId, compacted });
+		return { compacted };
+	}
+
+	memtree(o: { realmId: Id; spaceId: Id; agentId: Id }) {
+		const conv = this.convs.get(bindingKey({ realm: o.realmId, space: o.spaceId, agent: o.agentId }));
+		const viewBytes = this.opts.viewBytes ?? 6000;
+		if (!conv) return { leaves: 0, nodes: 0, llmNodes: 0, pending: this.builder.pending, viewBytes, view: [] };
+		const thread = String(conv.id);
+		const n = this.memory.leafCount(thread);
+		const view = this.memory.fitView(thread, n - 1, viewBytes).map((s) => ({ id: s.idx >= 0 ? `#${s.level}.${s.idx}` : "#~", msgs: s.hi - s.lo + 1, role: s.role ?? null, text: s.text }));
+		return { ...this.memory.stats(thread), pending: this.builder.pending, viewBytes, view };
+	}
+
+	/** Pi's own token and cost totals (`harness.usage()`), never a second counter of ours. */
+	usage() {
+		return this.harness.usage(ctx);
 	}
 
 	private setupSummarizer() {
@@ -479,5 +543,6 @@ export function failureText(reason: string, entries: readonly EntryRecord[]): st
 		return `⚠ The model could not answer: its quota or rate limit is used up (${(err ?? reason).slice(0, 160)}). Nothing was lost. Send the message again later, or ask an admin to pick another model for this agent.`;
 	if (/ECONNREFUSED|ENOTFOUND|fetch failed|network|timeout|timed out|unreachable/i.test(raw))
 		return `⚠ The model endpoint could not be reached (${(err ?? reason).slice(0, 160)}). Nothing was lost. Send the message again when it is back.`;
+	if (/abort/i.test(reason)) return "⏹ Stopped before it finished.";
 	return `⚠ No answer: ${reason}${err ? ` (${err.slice(0, 200)})` : ""}. Nothing was lost; try again.`;
 }
