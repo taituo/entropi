@@ -1,0 +1,436 @@
+import type { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
+import { conflict, forbidden, invalid, notFound } from "./errors.ts";
+import type {
+	Actor, ActorKind, AttentionItem, AttentionKind, DecisionRequest, ExternalRef, Focus, Id, Presence, PresenceState, Realm,
+	RealmKind, RealmPolicy, WorkItem, WorkState, ActivityEvent,
+} from "./types.ts";
+
+export const SYSTEM: Id = "system";
+const WORK_STATES: WorkState[] = ["queued", "working", "waiting", "blocked", "failed", "done", "cancelled"];
+const TERMINAL: WorkState[] = ["done", "cancelled"];
+const DEFAULT_POLICY: RealmPolicy = { separationOfDuties: true, autonomy: "low" };
+
+type Row = Record<string, any>;
+export type Listener = (e: ActivityEvent) => void;
+
+/**
+ * The whole domain behind one small surface. Rules enforced here, not in clients or adapters:
+ *  - every read and write is scoped by realm; nothing crosses a realm boundary
+ *  - every mutation names an actor that belongs to the realm
+ *  - every mutation appends an event in the same transaction as the projection change
+ *  - decisions are idempotent per key, first decision wins, authority and (optional) separation of duties are checked,
+ *    and an away human (Echo) can never decide
+ */
+export class Core {
+	readonly db: DatabaseSync;
+	private listeners = new Set<Listener>();
+	private pending: ActivityEvent[] = [];
+	private depth = 0;
+	now: () => number;
+
+	constructor(db: DatabaseSync, opts: { now?: () => number } = {}) {
+		this.db = db;
+		this.now = opts.now ?? Date.now;
+	}
+
+	// ------------------------------------------------------------------ plumbing
+
+	/** Run `fn` atomically. Events are published to subscribers only after the commit succeeded. */
+	tx<T>(fn: () => T): T {
+		if (this.depth > 0) return fn();
+		this.db.exec("BEGIN IMMEDIATE");
+		this.depth++;
+		try {
+			const out = fn();
+			this.db.exec("COMMIT");
+			this.depth--;
+			const sent = this.pending;
+			this.pending = [];
+			for (const e of sent) for (const l of this.listeners) try { l(e); } catch { /* a bad subscriber must not break the core */ }
+			return out;
+		} catch (e) {
+			this.depth--;
+			this.pending = [];
+			this.db.exec("ROLLBACK");
+			throw e;
+		}
+	}
+
+	private emit(realmId: Id, type: string, actorId: Id, subjectKind: string, subjectId: Id, data: Record<string, unknown> = {}): ActivityEvent {
+		const ts = this.now();
+		const r = this.db.prepare("INSERT INTO events (realm_id, ts, type, actor_id, subject_kind, subject_id, data) VALUES (?,?,?,?,?,?,?)")
+			.run(realmId, ts, type, actorId, subjectKind, subjectId, JSON.stringify(data));
+		const e: ActivityEvent = { seq: Number(r.lastInsertRowid), realmId, ts, type, actorId, subjectKind, subjectId, data };
+		this.pending.push(e);
+		return e;
+	}
+
+	subscribe(l: Listener): () => void {
+		this.listeners.add(l);
+		return () => this.listeners.delete(l);
+	}
+
+	/** Events of one realm after `seq`, oldest first. The basis of SSE resume. */
+	events(realmId: Id, afterSeq = 0, limit = 500): ActivityEvent[] {
+		return (this.db.prepare("SELECT * FROM events WHERE realm_id = ? AND seq > ? ORDER BY seq LIMIT ?").all(realmId, afterSeq, limit) as Row[]).map(rowToEvent);
+	}
+
+	// ------------------------------------------------------------------ realms and actors
+
+	createRealm(o: { id: Id; name: string; kind: RealmKind; policy?: Partial<RealmPolicy> }): Realm {
+		return this.tx(() => {
+			const have = this.getRealm(o.id);
+			if (have) return have;
+			if (!/^[a-z0-9][a-z0-9._-]{0,62}$/.test(o.id)) throw invalid("realm id must be lowercase [a-z0-9._-]");
+			const policy = { ...DEFAULT_POLICY, ...o.policy };
+			const now = this.now();
+			this.db.prepare("INSERT INTO realms (id, name, kind, policy, created_at) VALUES (?,?,?,?,?)").run(o.id, o.name, o.kind, JSON.stringify(policy), now);
+			this.db.prepare("INSERT INTO actors (realm_id, id, kind, name, roles, created_at) VALUES (?,?,?,?,?,?)").run(o.id, SYSTEM, "system", "Entropi", "[]", now);
+			this.emit(o.id, "realm.created", SYSTEM, "realm", o.id, { name: o.name, kind: o.kind, policy });
+			return this.getRealm(o.id)!;
+		});
+	}
+
+	getRealm(id: Id): Realm | undefined {
+		const r = this.db.prepare("SELECT * FROM realms WHERE id = ?").get(id) as Row | undefined;
+		return r ? { id: r.id, name: r.name, kind: r.kind, policy: JSON.parse(r.policy), createdAt: r.created_at } : undefined;
+	}
+
+	private realm(id: Id): Realm {
+		const r = this.getRealm(id);
+		if (!r) throw notFound(`realm ${id}`);
+		return r;
+	}
+
+	listRealms(): Realm[] {
+		return (this.db.prepare("SELECT id FROM realms ORDER BY created_at, id").all() as Row[]).map((r) => this.getRealm(r.id)!);
+	}
+
+	/** Add (or update the roles/name of) a member. Identity (id, kind) never changes once set. */
+	addActor(realmId: Id, o: { id: Id; kind: ActorKind; name: string; roles?: string[] }, by: Id = SYSTEM): Actor {
+		return this.tx(() => {
+			this.realm(realmId);
+			if (o.id === SYSTEM) throw forbidden("the system actor is reserved");
+			if (by !== SYSTEM) this.actor(realmId, by);
+			const cur = this.getActor(realmId, o.id);
+			if (cur && cur.kind !== o.kind) throw conflict(`actor ${o.id} is a ${cur.kind}; identity cannot change kind`);
+			const roles = [...new Set(o.roles ?? cur?.roles ?? [])].sort();
+			if (cur) this.db.prepare("UPDATE actors SET name = ?, roles = ? WHERE realm_id = ? AND id = ?").run(o.name, JSON.stringify(roles), realmId, o.id);
+			else {
+				this.db.prepare("INSERT INTO actors (realm_id, id, kind, name, roles, created_at) VALUES (?,?,?,?,?,?)").run(realmId, o.id, o.kind, o.name, JSON.stringify(roles), this.now());
+				this.db.prepare("INSERT INTO presence (realm_id, actor_id, state, echo, updated_at) VALUES (?,?,?,0,?)").run(realmId, o.id, o.kind === "human" ? "active" : "idle", this.now());
+			}
+			this.emit(realmId, cur ? "actor.updated" : "actor.joined", by, "actor", o.id, { kind: o.kind, name: o.name, roles });
+			return this.getActor(realmId, o.id)!;
+		});
+	}
+
+	getActor(realmId: Id, id: Id): Actor | undefined {
+		const r = this.db.prepare("SELECT * FROM actors WHERE realm_id = ? AND id = ?").get(realmId, id) as Row | undefined;
+		return r ? { realmId, id: r.id, kind: r.kind, name: r.name, roles: JSON.parse(r.roles), createdAt: r.created_at } : undefined;
+	}
+
+	/** An actor that must be a member of the realm. The membership check every mutation starts with. */
+	private actor(realmId: Id, id: Id): Actor {
+		const a = this.getActor(realmId, id);
+		if (!a) throw forbidden(`${id} is not a member of realm ${realmId}`);
+		return a;
+	}
+
+	listActors(realmId: Id): Actor[] {
+		return (this.db.prepare("SELECT id FROM actors WHERE realm_id = ? ORDER BY id").all(realmId) as Row[]).map((r) => this.getActor(realmId, r.id)!);
+	}
+
+	setPresence(realmId: Id, actorId: Id, state: PresenceState, o: { echo?: boolean } = {}): Presence {
+		return this.tx(() => {
+			const a = this.actor(realmId, actorId);
+			if (a.kind === "system") throw forbidden("the system actor has no presence");
+			const humanStates: PresenceState[] = ["active", "away", "silent", "offline"];
+			const agentStates: PresenceState[] = ["idle", "working", "waiting", "error", "offline"];
+			if (!(a.kind === "human" ? humanStates : agentStates).includes(state)) throw invalid(`${state} is not a presence state for a ${a.kind}`);
+			const echo = state === "away" && !!o.echo; // Echo exists only while away
+			this.db.prepare("UPDATE presence SET state = ?, echo = ?, updated_at = ? WHERE realm_id = ? AND actor_id = ?").run(state, echo ? 1 : 0, this.now(), realmId, actorId);
+			this.emit(realmId, "presence.changed", actorId, "actor", actorId, { state, echo });
+			return this.getPresence(realmId, actorId)!;
+		});
+	}
+
+	getPresence(realmId: Id, actorId: Id): Presence | undefined {
+		const r = this.db.prepare("SELECT * FROM presence WHERE realm_id = ? AND actor_id = ?").get(realmId, actorId) as Row | undefined;
+		return r ? { realmId, actorId, state: r.state, echo: !!r.echo, updatedAt: r.updated_at } : undefined;
+	}
+
+	// ------------------------------------------------------------------ work
+
+	createWork(realmId: Id, o: { id?: Id; kind: string; title: string; goal?: string; ownerId?: Id | null; parentId?: Id | null; state?: WorkState }, by: Id): WorkItem {
+		return this.tx(() => {
+			this.realm(realmId);
+			this.actor(realmId, by);
+			const id = o.id ?? `w_${randomUUID().slice(0, 8)}`;
+			const have = this.getWork(realmId, id);
+			if (have) return have; // idempotent
+			if (!o.title.trim()) throw invalid("work needs a title");
+			if (o.ownerId) this.actor(realmId, o.ownerId);
+			if (o.parentId && !this.getWork(realmId, o.parentId)) throw notFound(`parent work ${o.parentId}`);
+			const state = o.state ?? "queued";
+			if (!WORK_STATES.includes(state)) throw invalid(`unknown work state ${state}`);
+			const now = this.now();
+			this.db.prepare("INSERT INTO work (realm_id, id, kind, title, goal, state, phase, owner_id, parent_id, created_at, updated_at) VALUES (?,?,?,?,?,?,NULL,?,?,?,?)")
+				.run(realmId, id, o.kind, o.title, o.goal ?? "", state, o.ownerId ?? null, o.parentId ?? null, now, now);
+			this.emit(realmId, "work.created", by, "work", id, { kind: o.kind, title: o.title, state, parentId: o.parentId ?? null });
+			return this.getWork(realmId, id)!;
+		});
+	}
+
+	getWork(realmId: Id, id: Id): WorkItem | undefined {
+		const r = this.db.prepare("SELECT * FROM work WHERE realm_id = ? AND id = ?").get(realmId, id) as Row | undefined;
+		return r ? rowToWork(r) : undefined;
+	}
+
+	private work(realmId: Id, id: Id): WorkItem {
+		const w = this.getWork(realmId, id);
+		if (!w) throw notFound(`work ${id} in realm ${realmId}`);
+		return w;
+	}
+
+	listWork(realmId: Id, f: { state?: WorkState; parentId?: Id | null } = {}): WorkItem[] {
+		const rows = this.db.prepare("SELECT * FROM work WHERE realm_id = ? ORDER BY updated_at DESC, id").all(realmId) as Row[];
+		return rows.map(rowToWork).filter((w) => (f.state ? w.state === f.state : true) && (f.parentId === undefined ? true : w.parentId === f.parentId));
+	}
+
+	setWorkState(realmId: Id, workId: Id, state: WorkState, by: Id, o: { phase?: string | null; reason?: string } = {}): WorkItem {
+		return this.tx(() => {
+			this.actor(realmId, by);
+			const w = this.work(realmId, workId);
+			if (!WORK_STATES.includes(state)) throw invalid(`unknown work state ${state}`);
+			if (TERMINAL.includes(w.state) && state !== w.state) throw conflict(`work ${workId} is ${w.state}; terminal states are final`);
+			const phase = o.phase === undefined ? w.phase : o.phase;
+			if (state === w.state && phase === w.phase) return w;
+			this.db.prepare("UPDATE work SET state = ?, phase = ?, updated_at = ? WHERE realm_id = ? AND id = ?").run(state, phase, this.now(), realmId, workId);
+			this.emit(realmId, "work.state", by, "work", workId, { from: w.state, to: state, phase, reason: o.reason ?? null });
+			// Attention follows state: failures and blockers surface, and resolve when the work moves on.
+			if (state === "failed") this.raise(realmId, "failure", workId, workId, `${w.title} failed${o.reason ? `: ${o.reason}` : ""}`);
+			else this.resolve(realmId, "failure", workId);
+			if (state === "blocked") this.raise(realmId, "blocked", workId, workId, `${w.title} is blocked${o.reason ? `: ${o.reason}` : ""}`);
+			else this.resolve(realmId, "blocked", workId);
+			if (TERMINAL.includes(state)) this.cancelOpenDecisions(realmId, workId, by, `work ${state}`);
+			return this.getWork(realmId, workId)!;
+		});
+	}
+
+	// ------------------------------------------------------------------ external references
+
+	linkRef(realmId: Id, workId: Id, o: { source: string; externalId: string; label?: string; url?: string; state?: string }, by: Id): ExternalRef {
+		return this.tx(() => {
+			this.actor(realmId, by);
+			this.work(realmId, workId);
+			const cur = this.getRef(realmId, o.source, o.externalId);
+			if (cur && cur.workId !== workId) throw conflict(`${o.source}:${o.externalId} is already linked to work ${cur.workId}`);
+			if (!cur) {
+				this.db.prepare("INSERT INTO external_refs (realm_id, work_id, source, external_id, label, url, state, observed_at) VALUES (?,?,?,?,?,?,?,?)")
+					.run(realmId, workId, o.source, o.externalId, o.label ?? null, o.url ?? null, o.state ?? null, o.state ? this.now() : null);
+				this.emit(realmId, "ref.linked", by, "work", workId, { source: o.source, externalId: o.externalId, label: o.label ?? null });
+			}
+			return this.getRef(realmId, o.source, o.externalId)!;
+		});
+	}
+
+	getRef(realmId: Id, source: string, externalId: string): ExternalRef | undefined {
+		const r = this.db.prepare("SELECT * FROM external_refs WHERE realm_id = ? AND source = ? AND external_id = ?").get(realmId, source, externalId) as Row | undefined;
+		return r ? rowToRef(r) : undefined;
+	}
+
+	refsOf(realmId: Id, workId: Id): ExternalRef[] {
+		return (this.db.prepare("SELECT * FROM external_refs WHERE realm_id = ? AND work_id = ? ORDER BY source, external_id").all(realmId, workId) as Row[]).map(rowToRef);
+	}
+
+	/** A source reports the state of something it owns. Cached here; only a change produces an event. */
+	observeRef(realmId: Id, source: string, externalId: string, state: string, by: Id): ExternalRef {
+		return this.tx(() => {
+			this.actor(realmId, by);
+			const cur = this.getRef(realmId, source, externalId);
+			if (!cur) throw notFound(`ref ${source}:${externalId}`);
+			if (cur.state === state) return cur;
+			this.db.prepare("UPDATE external_refs SET state = ?, observed_at = ? WHERE realm_id = ? AND source = ? AND external_id = ?").run(state, this.now(), realmId, source, externalId);
+			this.emit(realmId, "ref.observed", by, "work", cur.workId, { source, externalId, from: cur.state, to: state });
+			return this.getRef(realmId, source, externalId)!;
+		});
+	}
+
+	// ------------------------------------------------------------------ decisions
+
+	/** Ask a person. Idempotent per (realm, key): a retried caller gets the original request back. */
+	requestDecision(realmId: Id, o: {
+		key: string; workId: Id; question: string; options?: string[]; context?: Record<string, unknown>;
+		urgency?: DecisionRequest["urgency"]; requiredAuthority?: string; expiresAt?: number | null;
+	}, by: Id): { decision: DecisionRequest; created: boolean } {
+		return this.tx(() => {
+			this.actor(realmId, by);
+			const have = this.decisionByKey(realmId, o.key);
+			if (have) return { decision: have, created: false };
+			const w = this.work(realmId, o.workId);
+			if (TERMINAL.includes(w.state)) throw conflict(`work ${w.id} is ${w.state}`);
+			const options = o.options ?? ["approve", "reject"];
+			if (options.length < 2 || new Set(options).size !== options.length) throw invalid("a decision needs at least two distinct options");
+			if (!o.question.trim()) throw invalid("a decision needs a question");
+			const id = `d_${randomUUID().slice(0, 8)}`;
+			this.db.prepare(`INSERT INTO decisions (realm_id, id, key, work_id, question, options, context, urgency, required_authority, requested_by, status, created_at, expires_at)
+				VALUES (?,?,?,?,?,?,?,?,?,?, 'open', ?, ?)`)
+				.run(realmId, id, o.key, o.workId, o.question, JSON.stringify(options), JSON.stringify(o.context ?? {}), o.urgency ?? "normal", o.requiredAuthority ?? "approver", by, this.now(), o.expiresAt ?? null);
+			this.emit(realmId, "decision.requested", by, "decision", id, { workId: o.workId, question: o.question, options, urgency: o.urgency ?? "normal", requiredAuthority: o.requiredAuthority ?? "approver" });
+			this.raise(realmId, "decision", o.workId, id, o.question);
+			if (w.state !== "waiting") this.setWorkState(realmId, o.workId, "waiting", by, { reason: "decision requested" });
+			return { decision: this.getDecision(realmId, id)!, created: true };
+		});
+	}
+
+	getDecision(realmId: Id, id: Id): DecisionRequest | undefined {
+		const r = this.db.prepare("SELECT * FROM decisions WHERE realm_id = ? AND id = ?").get(realmId, id) as Row | undefined;
+		return r ? rowToDecision(r) : undefined;
+	}
+
+	decisionByKey(realmId: Id, key: string): DecisionRequest | undefined {
+		const r = this.db.prepare("SELECT * FROM decisions WHERE realm_id = ? AND key = ?").get(realmId, key) as Row | undefined;
+		return r ? rowToDecision(r) : undefined;
+	}
+
+	/** Who may decide this: authority role, not the requester when separation of duties applies, a human, and present. */
+	canDecide(realmId: Id, decision: DecisionRequest, actorId: Id): { ok: true } | { ok: false; reason: string } {
+		const realm = this.realm(realmId);
+		const a = this.getActor(realmId, actorId);
+		if (!a) return { ok: false, reason: `${actorId} is not a member of realm ${realmId}` };
+		if (a.kind !== "human") return { ok: false, reason: "only a human can decide" };
+		if (!a.roles.includes(decision.requiredAuthority) && !a.roles.includes("admin")) return { ok: false, reason: `needs the ${decision.requiredAuthority} role` };
+		if (realm.policy.separationOfDuties && decision.requestedBy === actorId) return { ok: false, reason: "requester cannot decide their own request" };
+		const p = this.getPresence(realmId, actorId);
+		if (p && p.state !== "active") return { ok: false, reason: p.echo ? "away: Echo may answer questions but never decide" : `presence is ${p.state}` };
+		return { ok: true };
+	}
+
+	/** First decision wins; a second one conflicts rather than silently overwriting. */
+	decide(realmId: Id, decisionId: Id, actorId: Id, answer: string, note?: string): DecisionRequest {
+		return this.tx(() => {
+			const d = this.getDecision(realmId, decisionId);
+			if (!d) throw notFound(`decision ${decisionId} in realm ${realmId}`);
+			const ok = this.canDecide(realmId, d, actorId);
+			if (!ok.ok) throw forbidden(ok.reason);
+			if (d.status !== "open") throw conflict(`decision ${decisionId} is already ${d.status}${d.decidedBy ? ` (by ${d.decidedBy})` : ""}`);
+			if (!d.options.includes(answer)) throw invalid(`answer must be one of: ${d.options.join(", ")}`);
+			this.db.prepare("UPDATE decisions SET status = 'decided', answer = ?, decided_by = ?, note = ?, decided_at = ? WHERE realm_id = ? AND id = ? AND status = 'open'")
+				.run(answer, actorId, note ?? null, this.now(), realmId, decisionId);
+			this.emit(realmId, "decision.decided", actorId, "decision", decisionId, { workId: d.workId, answer, note: note ?? null });
+			this.resolve(realmId, "decision", decisionId);
+			const w = this.work(realmId, d.workId);
+			if (w.state === "waiting" && this.openDecisions(realmId, d.workId).length === 0) this.setWorkState(realmId, d.workId, "working", actorId, { reason: `decided: ${answer}` });
+			return this.getDecision(realmId, decisionId)!;
+		});
+	}
+
+	openDecisions(realmId: Id, workId?: Id): DecisionRequest[] {
+		const rows = workId
+			? this.db.prepare("SELECT * FROM decisions WHERE realm_id = ? AND status = 'open' AND work_id = ? ORDER BY created_at, id").all(realmId, workId)
+			: this.db.prepare("SELECT * FROM decisions WHERE realm_id = ? AND status = 'open' ORDER BY created_at, id").all(realmId);
+		return (rows as Row[]).map(rowToDecision);
+	}
+
+	private cancelOpenDecisions(realmId: Id, workId: Id, by: Id, why: string) {
+		for (const d of this.openDecisions(realmId, workId)) {
+			this.db.prepare("UPDATE decisions SET status = 'cancelled', decided_at = ? WHERE realm_id = ? AND id = ?").run(this.now(), realmId, d.id);
+			this.emit(realmId, "decision.cancelled", by, "decision", d.id, { workId, why });
+			this.resolve(realmId, "decision", d.id);
+		}
+	}
+
+	/** Expire open decisions whose deadline passed. Call from a timer; the core never runs one itself. */
+	expireDecisions(): number {
+		return this.tx(() => {
+			const rows = this.db.prepare("SELECT * FROM decisions WHERE status = 'open' AND expires_at IS NOT NULL AND expires_at <= ?").all(this.now()) as Row[];
+			for (const r of rows) {
+				this.db.prepare("UPDATE decisions SET status = 'expired', decided_at = ? WHERE realm_id = ? AND id = ?").run(this.now(), r.realm_id, r.id);
+				this.emit(r.realm_id, "decision.expired", SYSTEM, "decision", r.id, { workId: r.work_id });
+				this.resolve(r.realm_id, "decision", r.id);
+			}
+			return rows.length;
+		});
+	}
+
+	// ------------------------------------------------------------------ attention
+
+	private raise(realmId: Id, kind: AttentionKind, workId: Id, subjectId: Id, summary: string) {
+		const open = this.db.prepare("SELECT 1 FROM attention WHERE realm_id = ? AND kind = ? AND subject_id = ? AND resolved_at IS NULL").get(realmId, kind, subjectId);
+		if (open) return;
+		const id = `a_${randomUUID().slice(0, 8)}`;
+		this.db.prepare("INSERT INTO attention (realm_id, id, kind, work_id, subject_id, summary, created_at) VALUES (?,?,?,?,?,?,?)").run(realmId, id, kind, workId, subjectId, summary, this.now());
+		this.emit(realmId, "attention.raised", SYSTEM, "work", workId, { attentionId: id, kind, summary });
+	}
+
+	private resolve(realmId: Id, kind: AttentionKind, subjectId: Id) {
+		const rows = this.db.prepare("SELECT id, work_id FROM attention WHERE realm_id = ? AND kind = ? AND subject_id = ? AND resolved_at IS NULL").all(realmId, kind, subjectId) as Row[];
+		for (const r of rows) {
+			this.db.prepare("UPDATE attention SET resolved_at = ? WHERE realm_id = ? AND id = ?").run(this.now(), realmId, r.id);
+			this.emit(realmId, "attention.resolved", SYSTEM, "work", r.work_id, { attentionId: r.id, kind });
+		}
+	}
+
+	openAttention(realmId: Id): AttentionItem[] {
+		return (this.db.prepare("SELECT * FROM attention WHERE realm_id = ? AND resolved_at IS NULL ORDER BY created_at, id").all(realmId) as Row[]).map(rowToAttention);
+	}
+
+	/**
+	 * The human view, compiled deterministically from state: what needs this person, what is broken, what is moving,
+	 * and only a count for everything that is fine. Decisions this actor may not decide are not shown to them.
+	 */
+	focus(realmId: Id, actorId: Id): Focus {
+		this.realm(realmId);
+		const actor = this.actor(realmId, actorId);
+		const attention = this.openAttention(realmId);
+		const needsYou: Focus["needsYou"] = [];
+		for (const item of attention.filter((a) => a.kind === "decision")) {
+			const d = this.getDecision(realmId, item.subjectId);
+			if (d && d.status === "open" && (actor.kind !== "human" ? false : this.canDecideIgnoringPresence(realmId, d, actor))) needsYou.push({ decision: d, attention: item });
+		}
+		const urgency = { high: 0, normal: 1, low: 2 } as const;
+		needsYou.sort((x, y) => urgency[x.decision.urgency] - urgency[y.decision.urgency] || x.attention.createdAt - y.attention.createdAt);
+		const all = this.listWork(realmId).filter((w) => !TERMINAL.includes(w.state));
+		const working = all.filter((w) => w.state === "working");
+		const waiting = all.filter((w) => w.state === "waiting" && !needsYou.some((n) => n.decision.workId === w.id));
+		const shown = new Set([...working, ...waiting].map((w) => w.id));
+		return {
+			realmId,
+			needsYou,
+			attention: attention.filter((a) => a.kind !== "decision"),
+			working,
+			waiting,
+			background: { count: all.filter((w) => !shown.has(w.id) && w.state === "queued").length },
+		};
+	}
+
+	/** Away humans still *see* what needs them; presence only blocks deciding. */
+	private canDecideIgnoringPresence(realmId: Id, d: DecisionRequest, a: Actor): boolean {
+		const policy = this.realm(realmId).policy;
+		if (!a.roles.includes(d.requiredAuthority) && !a.roles.includes("admin")) return false;
+		return !(policy.separationOfDuties && d.requestedBy === a.id);
+	}
+}
+
+// ------------------------------------------------------------------ row mappers
+
+const rowToWork = (r: Row): WorkItem => ({
+	realmId: r.realm_id, id: r.id, kind: r.kind, title: r.title, goal: r.goal, state: r.state, phase: r.phase,
+	ownerId: r.owner_id, parentId: r.parent_id, createdAt: r.created_at, updatedAt: r.updated_at,
+});
+const rowToRef = (r: Row): ExternalRef => ({
+	realmId: r.realm_id, workId: r.work_id, source: r.source, externalId: r.external_id, label: r.label, url: r.url, state: r.state, observedAt: r.observed_at,
+});
+const rowToDecision = (r: Row): DecisionRequest => ({
+	realmId: r.realm_id, id: r.id, key: r.key, workId: r.work_id, question: r.question, options: JSON.parse(r.options), context: JSON.parse(r.context),
+	urgency: r.urgency, requiredAuthority: r.required_authority, requestedBy: r.requested_by, status: r.status, answer: r.answer, decidedBy: r.decided_by,
+	note: r.note, createdAt: r.created_at, expiresAt: r.expires_at, decidedAt: r.decided_at,
+});
+const rowToAttention = (r: Row): AttentionItem => ({
+	realmId: r.realm_id, id: r.id, kind: r.kind, workId: r.work_id, subjectId: r.subject_id, summary: r.summary, createdAt: r.created_at, resolvedAt: r.resolved_at,
+});
+const rowToEvent = (r: Row): ActivityEvent => ({
+	seq: r.seq, realmId: r.realm_id, ts: r.ts, type: r.type, actorId: r.actor_id, subjectKind: r.subject_kind, subjectId: r.subject_id, data: JSON.parse(r.data),
+});
