@@ -164,6 +164,7 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 		const agentId = space.agentIds.find((id) => handleOf(id) === r![2].toLowerCase());
 		if (!agentId) throw httpError(404, "no such agent in this space");
 		const ctl = d.control?.();
+		if (!ctl && m === "GET") return json(res, 200, { unavailable: true }); // reading is not an error when no model runtime is connected
 		if (!ctl) throw httpError(501, "no model runtime is connected (the scripted demo cannot do this)");
 		const o = { realmId, spaceId: space.id, agentId, by: me.id };
 		if (m === "GET" && r[3] === "memtree") return json(res, 200, ctl.memtree(o));
@@ -176,8 +177,7 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 	if (m === "GET" && rest === "/usage") {
 		if (!hasRole(me, "approver")) throw httpError(403, "approvers only");
 		const ctl = d.control?.();
-		if (!ctl) throw httpError(501, "no model runtime is connected");
-		return json(res, 200, { usage: await ctl.usage() });
+		return json(res, 200, { usage: ctl ? await ctl.usage() : null });
 	}
 
 	if (m === "POST" && rest === "/spaces") {

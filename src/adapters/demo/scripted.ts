@@ -49,7 +49,7 @@ export class ScriptedAgents implements AgentDispatcher {
 				await step("k8s_list_pods", '{"namespace":"demo-apps"}', "checkout-api-74bd  CrashLoopBackOff  6 restarts");
 				await step("k8s_logs", '{"pod":"checkout-api-74bd","previous":true}', "FATAL: database pool size must be > 0");
 				await step("k8s_get_configmap", '{"name":"checkout-config"}', "POOL_SIZE=0");
-				const text = "Root cause: `checkout-api` crashes at startup because `POOL_SIZE=0` in its ConfigMap. Evidence: the crashed container's log says *database pool size must be > 0*. Proposed fix: set `POOL_SIZE=4`. I need an approver to confirm before I change the live system.";
+				const text = "Root cause: `checkout-api` crashes at startup because `POOL_SIZE=0` in its ConfigMap. Evidence: the crashed container's log says: database pool size must be > 0. Proposed fix: set `POOL_SIZE=4`. I need an approver to confirm before I change the live system.";
 				core.updateMessage(o.realmId, msg.message.id, o.agentId, { text, meta: { activity }, status: "done" });
 				const space = core.getSpace(o.realmId, o.spaceId)!;
 				const work = core.createWork(o.realmId, { id: `fix-${o.messageId}`, kind: "incident", title: "checkout-api crash loop", goal: "Restore checkout-api", ownerId: o.agentId, spaceId: space.id, state: "working" }, o.agentId);

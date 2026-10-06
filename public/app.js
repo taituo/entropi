@@ -13,7 +13,7 @@ const api = async (path, opts = {}) => {
 };
 
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-const initials = (n) => n.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+const initials = (n) => n.split(/\s+/).filter((w) => /^\p{L}/u.test(w)).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
 const time = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /** Small, safe markdown: everything is escaped first, then fences, code, bold and mentions are added back. */
@@ -194,6 +194,7 @@ function Message({ m, me, agentIds, onDecide, onAction }) {
 	if (m.kind === "case") return html`<div class="msg" style="max-width:760px"><${CaseCard} m=${m} /></div>`;
 	if (m.kind === "notice") return html`<div class="notice">${m.text}</div>`;
 	if (m.kind === "decision") return html`<${DecisionCard} m=${m} me=${me} onDecide=${onDecide} />`;
+	if (m.kind === "delegation") return html`<div class="deleg"><div class="head"><b>${m.authorName}</b> asked <b>@${m.meta.to}</b></div><div class="text" dangerouslySetInnerHTML=${{ __html: md(m.text, agentIds) }}></div></div>`;
 	const agent = me.agentsById[m.authorId];
 	const human = !agent;
 	const working = m.status === "working";
@@ -203,27 +204,49 @@ function Message({ m, me, agentIds, onDecide, onAction }) {
 			<div class="meta"><b>${m.authorName}</b>${!human && html`<span class="role">agent</span>`}<time>${time(m.createdAt)}</time></div>
 			${!human && html`<${Activity} items=${m.meta.activity} />`}
 			${working && !m.text && html`<div class="status"><span class="dot working"></span> ${m.authorName} is working${current ? html` — running <code>${current.name}</code>` : ""}…</div>`}
+			${(m.meta.images || []).length > 0 && html`<div class="atts">${m.meta.images.map((a) => html`<a href=${me.R("/files/" + a.id)} target="_blank" rel="noopener"><img class="att" src=${me.R("/files/" + a.id)} alt=${a.name} loading="lazy" /></a>`)}</div>`}
 			${(m.meta.artifacts || []).map((a) => (a.kind === "chart" ? html`<${Chart} c=${a} />` : a.kind === "ui" ? html`<${UiView} spec=${a.spec} onAction=${onAction} />` : html`<${DataTable} t=${a} />`))}
 			${m.text && html`<div class=${"text" + (working ? " cursor" : "")} dangerouslySetInnerHTML=${{ __html: md(m.text, agentIds) }}></div>`}
 		</div></div>`;
 }
 
-function Composer({ space, agents, canPost, onSend }) {
+function Composer({ space, agents, canPost, onSend, R }) {
 	const [text, setText] = useState("");
 	const [sel, setSel] = useState(0);
+	const [files, setFiles] = useState([]);
+	const [busy, setBusy] = useState(0);
+	const [err, setErr] = useState("");
 	const ta = useRef();
+	const picker = useRef();
 	const m = /(?:^|\s)@([\w-]*)$/.exec(text);
 	const options = m ? agents.filter((a) => a.handle.startsWith(m[1].toLowerCase())) : [];
 	const pick = (a) => { setText(text.replace(/@[\w-]*$/, `@${a.handle} `)); setSel(0); ta.current?.focus(); };
-	const canSend = canPost && text.trim();
-	const send = () => { if (canSend) { onSend(text.trim()); setText(""); } };
+	const upload = async (list) => {
+		for (const f of [...list].filter((x) => x.type.startsWith("image/")).slice(0, 4 - files.length)) {
+			setBusy((n) => n + 1); setErr("");
+			try {
+				const r = await fetch(R(`/spaces/${space.id}/upload?name=${encodeURIComponent(f.name || "pasted-image.png")}`), { method: "POST", headers: { "x-requested-with": "entropi", "content-type": "application/octet-stream" }, body: f });
+				const d = await r.json();
+				if (!r.ok) throw new Error(d.error || r.statusText);
+				setFiles((cur) => [...cur, d.attachment]);
+			} catch (e) { setErr(e.message); }
+			setBusy((n) => n - 1);
+		}
+	};
+	const canSend = canPost && busy === 0 && (text.trim() || files.length);
+	const send = () => { if (canSend) { onSend(text.trim(), files.map((f) => f.id)); setText(""); setFiles([]); } };
 	useEffect(() => { const t = ta.current; if (t) { t.style.height = "auto"; t.style.height = t.scrollHeight + "px"; } }, [text]);
-	return html`<div class="composer">
+	useEffect(() => { setFiles([]); setErr(""); }, [space.id]);
+	return html`<div class="composer" onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => { e.preventDefault(); if (canPost) upload(e.dataTransfer.files); }}>
 		${options.length > 0 && html`<div class="suggest">${options.map((a, i) => html`<button class=${i === sel ? "sel" : ""} onMouseDown=${(e) => { e.preventDefault(); pick(a); }}><${Avatar} agent=${a} name=${a.name} /> <span><b>@${a.handle}</b> <span style="color:var(--muted)">${a.profile.title || ""}</span></span></button>`)}</div>`}
+		${(files.length > 0 || busy > 0) && html`<div class="previews">${files.map((f) => html`<div class="prev"><img src=${R("/files/" + f.id)} alt=${f.name} /><button title="Remove" onClick=${() => setFiles((c) => c.filter((x) => x.id !== f.id))}>×</button></div>`)}${busy > 0 && html`<div class="prev loading">…</div>`}</div>`}
 		<div class="box">
+			<button class="attach" title="Attach an image (or paste / drop one)" disabled=${!canPost} onClick=${() => picker.current.click()}>📎</button>
+			<input ref=${picker} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange=${(e) => { upload(e.target.files); e.target.value = ""; }} />
 			<textarea ref=${ta} rows="1" disabled=${!canPost} value=${text}
 				placeholder=${canPost ? (space.kind === "dm" ? `Message ${space.name} privately` : `Message #${space.name} — mention an agent with @`) : "You cannot post here"}
 				onInput=${(e) => setText(e.target.value)}
+				onPaste=${(e) => { const imgs = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/")); if (imgs.length) { e.preventDefault(); upload(imgs); } }}
 				onKeyDown=${(e) => {
 					if (options.length && (e.key === "Tab" || e.key === "Enter")) { e.preventDefault(); return pick(options[sel % options.length]); }
 					if (options.length && e.key === "ArrowDown") { e.preventDefault(); return setSel((sel + 1) % options.length); }
@@ -231,17 +254,41 @@ function Composer({ space, agents, canPost, onSend }) {
 				}} />
 			<button class="send" disabled=${!canSend} onClick=${send}>Send</button>
 		</div>
-		<div class="hint">${space.kind === "dm" ? `Only you can see this chat. ${space.name} answers every message.` : "Agents only act when mentioned. Shift+Enter for a new line."}</div>
+		<div class="hint">${err ? html`<span style="color:var(--bad)">${err}</span>` : space.kind === "dm" ? `Only you can see this chat. ${space.name} answers every message.` : "Agents only act when mentioned. Shift+Enter for a new line. Paste or drop images to share them."}</div>
 	</div>`;
 }
 
-function AgentCard({ a, presence }) {
+function MemTree({ R, spaceId, agent, canOperate, onFlash }) {
+	const [info, setInfo] = useState(null);
+	const [busy, setBusy] = useState(false);
+	const load = () => api(R(`/spaces/${spaceId}/agents/${agent.handle}/memtree`)).then(setInfo).catch(() => setInfo({ unavailable: true }));
+	const compact = async () => {
+		setBusy(true);
+		try {
+			const r = await api(R(`/spaces/${spaceId}/agents/${agent.handle}/compact`), { body: {} });
+			onFlash(r.compacted ? "Compacted: the agent's context now starts with the compressed memory view" : "Nothing to compact yet (the history is shorter than the kept tail)");
+			load();
+		} catch (e) { onFlash(e.message); }
+		setBusy(false);
+	};
+	return html`<details class="mt" onToggle=${(e) => e.target.open && load()}>
+		<summary>Memory tree</summary>
+		${info?.unavailable && html`<div class="ui-sub">No model runtime is connected.</div>`}
+		${info && !info.unavailable && html`<div class="ui-sub">${info.leaves} messages · ${info.nodes} summaries (${info.llmNodes} by model, ${info.pending} pending) · view ${info.view.length} lines, ≤ ${info.viewBytes} B</div>
+			<div class="mtview">${info.view.slice(-40).map((l) => html`<div class="mtl"><code>${l.id}</code> <span class="ui-sub">${l.msgs > 1 ? l.msgs + " msgs" : l.role}</span> ${l.text}</div>`)}</div>`}
+		${canOperate && html`<button class="btn small" disabled=${busy} onClick=${compact}>${busy ? "Compacting…" : "Compact now"}</button>`}
+	</details>`;
+}
+
+function AgentCard({ a, presence, R, spaceId, canOperate, onStop, onFlash }) {
 	const p = presence[a.id] || { state: "idle" };
 	const status = p.state === "waiting" ? "waiting_approval" : p.state === "working" ? "working" : "idle";
 	const label = { idle: "Idle", working: "Working", waiting_approval: "Waiting for a decision" }[status];
 	return html`<details class="agentcard">
 		<summary><div class="top"><${Avatar} agent=${a} name=${a.name} /><div><b>${a.name}</b><span>${a.profile.title || ""} · <span class=${"dot " + status} style="display:inline-block"></span> ${label}</span></div></div></summary>
 		<ul>${(a.profile.can || []).map((c) => html`<li class="can">${c}</li>`)}${(a.profile.cannot || []).map((c) => html`<li class="cannot">${c}</li>`)}</ul>
+		<${MemTree} R=${R} spaceId=${spaceId} agent=${a} canOperate=${canOperate} onFlash=${onFlash} />
+		${canOperate && status !== "idle" && html`<button class="btn stopbtn" onClick=${() => onStop(a)}>Stop</button>`}
 	</details>`;
 }
 
@@ -271,6 +318,8 @@ function App() {
 	const [newCase, setNewCase] = useState(null);
 	const [showArchived, setShowArchived] = useState(false);
 	const [toast, setToast] = useState("");
+	const [usage, setUsage] = useState(undefined);
+	const [navOpen, setNavOpen] = useState(false);
 	const tl = useRef();
 	const stick = useRef(true);
 	const spaceRef = useRef(spaceId);
@@ -293,16 +342,18 @@ function App() {
 				user: { name: d.me.name, id: d.me.id }, brand: who.brand, realm: d.realm, agents, agentsById: Object.fromEntries(agents.map((a) => [a.id, a])), perms,
 				roleLabel: perms.admin ? "admin" : perms.approve ? "approver" : perms.operate ? "operator" : "viewer",
 				canDecide: (m) => perms.approve && (m.meta.requiredAuthority !== "admin" || perms.admin),
+				R,
 			});
 			setPresence(Object.fromEntries(d.presence.map((p) => [p.actorId, p])));
 			setSpaces(d.spaces);
 			document.title = who.brand.name;
 			document.documentElement.style.setProperty("--accent", who.brand.accent);
 			loadFocus();
+			if (perms.approve) api(R("/usage")).then((u) => setUsage(u.usage)).catch(() => setUsage(null)); else setUsage(undefined);
 		})();
 	}, []);
 
-	useEffect(() => { location.hash = spaceId; if (realmRef.current) loadMessages(spaceId); stick.current = true; }, [spaceId, me]);
+	useEffect(() => { setNavOpen(false); location.hash = spaceId; if (realmRef.current) loadMessages(spaceId); stick.current = true; }, [spaceId, me]);
 
 	useEffect(() => {
 		if (!me) return;
@@ -339,14 +390,15 @@ function App() {
 		try { const d = await api(R("/spaces"), { body: { topic: v } }); setNewCase(null); go(d.space); } catch (err) { flash(err.message); }
 	};
 	const openDm = (handle) => api(R("/dms"), { body: { agent: handle } }).then((d) => go(d.space)).catch((err) => flash(err.message));
-	const send = (text) => { stick.current = true; return api(R(`/spaces/${space.id}/messages`), { body: { text } }).catch((e) => flash(e.message)); };
+	const send = (text, attachments = []) => { stick.current = true; return api(R(`/spaces/${space.id}/messages`), { body: { text, attachments } }).catch((e) => flash(e.message)); };
+	const stop = (a) => api(R(`/spaces/${space.id}/agents/${a.handle}/stop`), { body: {} }).then((r) => flash(r.stopped ? "Stopped" : "Nothing was running")).catch((e) => flash(e.message));
 	const decide = (id, answer, note) => api(R(`/decisions/${id}/decide`), { body: { answer, note } }).then(loadFocus).catch((e) => flash(e.message));
 	const archive = (id, on) => api(R(`/spaces/${id}/${on ? "archive" : "reopen"}`), { body: {} }).catch((err) => flash(err.message));
 	const pending = (focus?.needsYou || []).reduce((m, n) => ((m[n.spaceId] = (m[n.spaceId] || 0) + 1), m), {});
 	const status = (a) => (presence[a.id]?.state === "waiting" ? "waiting_approval" : presence[a.id]?.state === "working" ? "working" : "idle");
 
 	return html`<div class="shell">
-		<aside class="side">
+		<aside class=${"side" + (navOpen ? " navopen" : "")}>
 			<div class="brand"><div class="logo"><div class="mark">◆</div>${me.brand.name}</div><div class="ws">${me.realm.name}</div></div>
 			<div class="side-scroll">
 			<div class="section"><h4>Channels</h4>
@@ -373,21 +425,22 @@ function App() {
 		</aside>
 		<main class="main">
 			<div class="header">
+				<button class="navbtn" aria-label="Channels" onClick=${() => setNavOpen(!navOpen)}>☰</button>
 				<h2>${space.kind === "dm" ? "🔒 " + space.name : space.kind === "case" ? "◆ " + space.name : "# " + space.name}</h2><span class="topic">${space.topic}</span>
 				${space.kind === "case" && me.perms.operate && html`<button class="btn small" onClick=${() => archive(space.id, space.status === "open")}>${space.status === "open" ? "Archive case" : "Reopen"}</button>`}
-				<span class="pill demo" title="No model is connected yet; agents follow a script.">scripted agents</span>
+				${usage === null ? html`<span class="pill demo" title="No model runtime is connected; agents follow a script.">scripted agents</span>` : usage && html`<span class="pill" title=${Object.entries(usage.models).map(([k, v]) => k + ": " + v.input + " in / " + v.output + " out").join("\n")}>tokens ${Object.values(usage.models).reduce((n, v) => n + v.input + v.output, 0).toLocaleString()}</span>`}
 			</div>
 			${(focus?.needsYou || []).some((n) => n.spaceId === space.id) && html`<div class="banner">⚠ ${focus.needsYou.filter((n) => n.spaceId === space.id).length} decision waiting: <b>${focus.needsYou.find((n) => n.spaceId === space.id).decision.question}</b> — scroll down to the card.</div>`}
 			<div class="timeline" ref=${tl} onScroll=${(e) => { const t = e.target; stick.current = t.scrollHeight - t.scrollTop - t.clientHeight < 80; }}>
 				${messages.map((m) => html`<${Message} key=${m.id} m=${m} me=${me} agentIds=${agentIds} onDecide=${decide} onAction=${(a) => a.type === "message" && send(a.text)} />`)}
 			</div>
-			<${Composer} space=${space} agents=${space.kind === "dm" ? [] : spAgents} canPost=${me.perms.post && space.status === "open"} onSend=${send} />
+			<${Composer} space=${space} agents=${space.kind === "dm" ? [] : spAgents} canPost=${me.perms.post && space.status === "open"} onSend=${send} R=${R} />
 		</main>
 		<aside class="ctx">
 			<${FocusPanel} focus=${focus} open=${setSpaceId} />
 			<div class="ctx-scroll">
 				<h3>Agents in ${space.kind === "dm" ? space.name : "#" + space.name}</h3>
-				${spAgents.map((a) => html`<${AgentCard} key=${a.id} a=${a} presence=${presence} />`)}
+				${spAgents.map((a) => html`<${AgentCard} key=${a.id} a=${a} presence=${presence} R=${R} spaceId=${space.id} canOperate=${me.perms.operate} onStop=${stop} onFlash=${flash} />`)}
 			</div>
 		</aside>
 		${toast && html`<div class="toast">${toast}</div>`}
