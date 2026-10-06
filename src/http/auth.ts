@@ -1,30 +1,37 @@
-import { createHmac, randomBytes, createHash, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Config } from "../config.ts";
 
-/** Who signed in, as the identity provider says. Becomes an Actor (`human:<sub>`) in each realm they belong to. */
-export type User = { sub: string; name: string; email?: string; roles: string[] };
+/** Who is calling, as far as the core is concerned. Becomes an Actor (`human:<sub>`) in each realm they belong to. */
+export type User = { sub: string; name: string; roles: string[] };
 
-const SESSION_TTL_S = 8 * 3600;
 const DEV_USERS: Record<string, User> = {
 	alice: { sub: "dev-alice", name: "Alice (approver)", roles: ["approver"] },
 	bob: { sub: "dev-bob", name: "Bob (operator)", roles: ["operator"] },
 	carol: { sub: "dev-carol", name: "Carol (viewer)", roles: ["viewer"] },
 };
+const SESSION_TTL_S = 8 * 3600;
 
-/** Sealed-cookie sessions and OIDC authorization-code + PKCE (or a dev picker). No state on the server. */
-export function createAuth(cfg: Pick<Config, "sessionSecret" | "cookieSecure" | "publicUrl" | "auth">) {
+const header = (req: IncomingMessage, name: string): string | undefined => {
+	const v = req.headers[name.toLowerCase()];
+	const s = (Array.isArray(v) ? v[0] : v)?.trim();
+	return s ? s : undefined;
+};
+
+/**
+ * Two ways to know who is calling, nothing else (see docs/steering.md):
+ *  - "dev":   a local picker that sets a signed cookie. For laptops and tests only.
+ *  - "proxy": trust the identity a reverse proxy in front of us put in a header. Only when explicitly switched on.
+ */
+export function createAuth(cfg: Pick<Config, "sessionSecret" | "cookieSecure" | "auth">) {
 	const a = cfg.auth;
-	const b64 = (b: Buffer | string) => Buffer.from(b).toString("base64url");
 	const mac = (data: string) => createHmac("sha256", cfg.sessionSecret).update(data).digest("base64url");
 	const seal = (payload: object) => {
-		const body = b64(JSON.stringify(payload));
+		const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
 		return `${body}.${mac(body)}`;
 	};
-	function unseal<T>(value: string | undefined): T | undefined {
-		if (!value) return undefined;
-		const [body, sig] = value.split(".");
+	function unseal(value: string | undefined): (User & { exp: number }) | undefined {
+		const [body, sig] = (value ?? "").split(".");
 		if (!body || !sig) return undefined;
 		const expected = Buffer.from(mac(body)), given = Buffer.from(sig);
 		if (expected.length !== given.length || !timingSafeEqual(expected, given)) return undefined;
@@ -35,85 +42,44 @@ export function createAuth(cfg: Pick<Config, "sessionSecret" | "cookieSecure" | 
 			return undefined;
 		}
 	}
-	function cookies(req: IncomingMessage): Record<string, string> {
-		const out: Record<string, string> = {};
+	const cookie = (req: IncomingMessage, name: string) => {
 		for (const part of (req.headers.cookie ?? "").split(";")) {
 			const i = part.indexOf("=");
-			if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+			if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
 		}
-		return out;
-	}
-	function setCookie(res: ServerResponse, name: string, value: string, maxAge: number) {
-		const attrs = [`${name}=${encodeURIComponent(value)}`, "Path=/", "HttpOnly", "SameSite=Lax", `Max-Age=${maxAge}`];
-		if (cfg.cookieSecure) attrs.push("Secure");
-		const prev = res.getHeader("set-cookie");
-		res.setHeader("set-cookie", [...(Array.isArray(prev) ? prev : prev ? [String(prev)] : []), attrs.join("; ")]);
-	}
-	const startSession = (res: ServerResponse, u: User) => setCookie(res, "session", seal({ ...u, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_S }), SESSION_TTL_S);
-	const jwks = a.issuerInternal ? createRemoteJWKSet(new URL(`${a.issuerInternal}/protocol/openid-connect/certs`)) : undefined;
+		return undefined;
+	};
+	const setCookie = (res: ServerResponse, value: string, maxAge: number) =>
+		res.setHeader("set-cookie", [`session=${encodeURIComponent(value)}`, "Path=/", "HttpOnly", "SameSite=Lax", `Max-Age=${maxAge}`, ...(cfg.cookieSecure ? ["Secure"] : [])].join("; "));
 
 	return {
-		userFrom: (req: IncomingMessage): User | undefined => unseal<User & { exp: number }>(cookies(req).session),
-
-		login(_req: IncomingMessage, res: ServerResponse, url: URL) {
-			if (a.mode === "dev") {
-				const as = url.searchParams.get("as");
-				if (as && DEV_USERS[as]) {
-					startSession(res, DEV_USERS[as]);
-					res.writeHead(302, { location: "/" }).end();
-					return;
-				}
-				res.writeHead(200, { "content-type": "text/html" }).end(`<h3>Dev login (AUTH_MODE=dev)</h3>${Object.keys(DEV_USERS).map((k) => `<p><a href="/auth/login?as=${k}">${k}</a></p>`).join("")}`);
-				return;
+		userFrom(req: IncomingMessage): User | undefined {
+			if (a.mode === "proxy") {
+				const sub = header(req, a.userHeader);
+				if (!sub) return undefined;
+				const raw = a.rolesHeader ? header(req, a.rolesHeader) : undefined;
+				const roles = raw ? raw.split(",").map((r) => r.trim()).filter(Boolean) : a.defaultRoles;
+				return { sub, name: (a.nameHeader && header(req, a.nameHeader)) || sub, roles };
 			}
-			const state = randomBytes(16).toString("base64url");
-			const verifier = randomBytes(32).toString("base64url");
-			setCookie(res, "oidc", seal({ state, verifier, exp: Math.floor(Date.now() / 1000) + 600 }), 600);
-			const q = new URLSearchParams({
-				client_id: a.clientId, response_type: "code", scope: "openid profile email", redirect_uri: `${cfg.publicUrl}/auth/callback`,
-				state, code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256",
-			});
-			res.writeHead(302, { location: `${a.issuerPublic}/protocol/openid-connect/auth?${q}` }).end();
+			const s = unseal(cookie(req, "session"));
+			return s && { sub: s.sub, name: s.name, roles: s.roles };
 		},
 
-		async callback(req: IncomingMessage, res: ServerResponse, url: URL): Promise<User | undefined> {
-			const tx = unseal<{ state: string; verifier: string }>(cookies(req).oidc);
-			const code = url.searchParams.get("code");
-			if (!tx || !code || url.searchParams.get("state") !== tx.state) {
-				res.writeHead(400, { "content-type": "text/plain" }).end("Invalid login state. Go back and try again.");
+		login(_req: IncomingMessage, res: ServerResponse, url: URL) {
+			if (a.mode === "proxy") return void res.writeHead(302, { location: "/" }).end(); // the proxy already signed you in
+			const as = url.searchParams.get("as");
+			if (as && DEV_USERS[as]) {
+				setCookie(res, seal({ ...DEV_USERS[as], exp: Math.floor(Date.now() / 1000) + SESSION_TTL_S }), SESSION_TTL_S);
+				res.writeHead(302, { location: "/" }).end();
 				return;
 			}
-			const tokenRes = await fetch(`${a.issuerInternal}/protocol/openid-connect/token`, {
-				method: "POST",
-				headers: { "content-type": "application/x-www-form-urlencoded" },
-				body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: `${cfg.publicUrl}/auth/callback`, client_id: a.clientId, client_secret: a.clientSecret, code_verifier: tx.verifier }),
-			});
-			if (!tokenRes.ok) {
-				res.writeHead(502, { "content-type": "text/plain" }).end("Login failed (token exchange).");
-				return;
-			}
-			const tok = (await tokenRes.json()) as { id_token: string; access_token: string };
-			const id = await jwtVerify(tok.id_token, jwks!, { issuer: a.issuerPublic, audience: a.clientId });
-			const access = await jwtVerify(tok.access_token, jwks!, { issuer: a.issuerPublic });
-			const user: User = {
-				sub: String(id.payload.sub),
-				name: String(id.payload.name ?? id.payload.preferred_username ?? "user"),
-				email: id.payload.email ? String(id.payload.email) : undefined,
-				roles: ((access.payload.realm_access as any)?.roles ?? []) as string[],
-			};
-			setCookie(res, "oidc", "", 0);
-			startSession(res, user);
-			res.writeHead(302, { location: "/" }).end();
-			return user;
+			res.writeHead(200, { "content-type": "text/html" }).end(`<h3>Dev login (AUTH_MODE=dev)</h3>${Object.keys(DEV_USERS).map((k) => `<p><a href="/auth/login?as=${k}">${k}</a></p>`).join("")}`);
 		},
 
 		logout(_req: IncomingMessage, res: ServerResponse) {
-			setCookie(res, "session", "", 0);
-			if (a.mode === "dev") {
-				res.writeHead(302, { location: "/auth/login" }).end();
-				return;
-			}
-			res.writeHead(302, { location: `${a.issuerPublic}/protocol/openid-connect/logout?${new URLSearchParams({ client_id: a.clientId, post_logout_redirect_uri: `${cfg.publicUrl}/` })}` }).end();
+			if (a.mode === "proxy") return void res.writeHead(302, { location: a.logoutUrl || "/" }).end();
+			setCookie(res, "", 0);
+			res.writeHead(302, { location: "/auth/login" }).end();
 		},
 	};
 }

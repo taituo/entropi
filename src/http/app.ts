@@ -42,7 +42,6 @@ export function createApp(o: { core: Core; config: Config; dispatcher?: AgentDis
 		try {
 			if (url.pathname === "/healthz") return json(res, 200, { ok: true });
 			if (url.pathname === "/auth/login") return auth.login(req, res, url);
-			if (url.pathname === "/auth/callback") return void (await auth.callback(req, res, url));
 			if (url.pathname === "/auth/logout") return auth.logout(req, res);
 
 			const user = auth.userFrom(req);

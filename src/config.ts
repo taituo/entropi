@@ -1,7 +1,7 @@
 const env = process.env;
 const num = (v: string | undefined, d: number) => (v && Number.isFinite(Number(v)) ? Number(v) : d);
 // Keys arrive from files and secrets, often with a trailing newline that would corrupt a header.
-for (const k of ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "SESSION_SECRET", "OIDC_CLIENT_SECRET"]) if (env[k]) env[k] = env[k]!.trim();
+for (const k of ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "SESSION_SECRET"]) if (env[k]) env[k] = env[k]!.trim();
 
 export const config = {
 	port: num(env.PORT, 8080),
@@ -17,12 +17,18 @@ export const config = {
 		accent: env.BRAND_ACCENT ?? "#6d5efc",
 	},
 	auth: {
-		/** "oidc" in production, "dev" for local runs without Keycloak (never in a cluster). */
-		mode: (env.AUTH_MODE ?? "oidc") as "oidc" | "dev",
-		issuerPublic: env.OIDC_ISSUER_PUBLIC ?? "",
-		issuerInternal: env.OIDC_ISSUER_INTERNAL ?? env.OIDC_ISSUER_PUBLIC ?? "",
-		clientId: env.OIDC_CLIENT_ID ?? "entropi",
-		clientSecret: env.OIDC_CLIENT_SECRET ?? "",
+		/** "dev" = local picker (laptops, tests). "proxy" = trust the identity a reverse proxy puts in a header. Authentication itself is outside Entropi. */
+		mode: (env.AUTH_MODE ?? "dev") as "dev" | "proxy",
+		/** proxy mode: header carrying the stable user id (e.g. X-Forwarded-User). */
+		userHeader: env.AUTH_USER_HEADER ?? "x-forwarded-user",
+		/** proxy mode, optional: header with a display name. */
+		nameHeader: env.AUTH_NAME_HEADER ?? "",
+		/** proxy mode, optional: header with comma-separated roles (viewer, operator, approver, admin). */
+		rolesHeader: env.AUTH_ROLES_HEADER ?? "",
+		/** proxy mode: roles when no roles header is configured or present. */
+		defaultRoles: (env.AUTH_DEFAULT_ROLES ?? "viewer").split(",").map((r) => r.trim()).filter(Boolean),
+		/** proxy mode: where "sign out" goes (e.g. /oauth2/sign_out). */
+		logoutUrl: env.AUTH_LOGOUT_URL ?? "",
 	},
 };
 export type Config = typeof config;
