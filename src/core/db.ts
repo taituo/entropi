@@ -70,6 +70,8 @@ CREATE UNIQUE INDEX messages_request ON messages(realm_id, request_id) WHERE req
 ALTER TABLE work ADD COLUMN space_id TEXT;
 ALTER TABLE decisions ADD COLUMN message_id INTEGER;
 `,
+	// Free-form actor profile: an agent's capability card (title, colour, what it can and cannot do) for UIs.
+	`ALTER TABLE actors ADD COLUMN profile TEXT NOT NULL DEFAULT '{}';`,
 ];
 
 export function openDb(path: string): DatabaseSync {

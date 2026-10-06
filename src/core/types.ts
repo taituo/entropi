@@ -19,7 +19,7 @@ export type Realm = { id: Id; name: string; kind: RealmKind; policy: RealmPolicy
 
 export type ActorKind = "human" | "agent" | "system";
 /** Immutable identity (id) plus a display-name snapshot. Roles are per realm: the same actor may differ between realms. */
-export type Actor = { realmId: Id; id: Id; kind: ActorKind; name: string; roles: string[]; createdAt: number };
+export type Actor = { realmId: Id; id: Id; kind: ActorKind; name: string; roles: string[]; profile: Record<string, unknown>; createdAt: number };
 
 export type PresenceState = "active" | "away" | "silent" | "idle" | "working" | "waiting" | "error" | "offline";
 /** `echo`: a human is away and a delegate may answer questions about them, but never contribute, vote or approve. */

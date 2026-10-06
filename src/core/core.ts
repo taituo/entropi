@@ -133,7 +133,7 @@ export class Core {
 	}
 
 	/** Add (or update the roles/name of) a member. Identity (id, kind) never changes once set. */
-	addActor(realmId: Id, o: { id: Id; kind: ActorKind; name: string; roles?: string[] }, by: Id = SYSTEM): Actor {
+	addActor(realmId: Id, o: { id: Id; kind: ActorKind; name: string; roles?: string[]; profile?: Record<string, unknown> }, by: Id = SYSTEM): Actor {
 		return this.tx(() => {
 			this.realm(realmId);
 			if (o.id === SYSTEM) throw forbidden("the system actor is reserved");
@@ -141,9 +141,10 @@ export class Core {
 			const cur = this.getActor(realmId, o.id);
 			if (cur && cur.kind !== o.kind) throw conflict(`actor ${o.id} is a ${cur.kind}; identity cannot change kind`);
 			const roles = [...new Set(o.roles ?? cur?.roles ?? [])].sort();
-			if (cur) this.db.prepare("UPDATE actors SET name = ?, roles = ? WHERE realm_id = ? AND id = ?").run(o.name, JSON.stringify(roles), realmId, o.id);
+			const profile = o.profile ?? cur?.profile ?? {};
+			if (cur) this.db.prepare("UPDATE actors SET name = ?, roles = ?, profile = ? WHERE realm_id = ? AND id = ?").run(o.name, JSON.stringify(roles), JSON.stringify(profile), realmId, o.id);
 			else {
-				this.db.prepare("INSERT INTO actors (realm_id, id, kind, name, roles, created_at) VALUES (?,?,?,?,?,?)").run(realmId, o.id, o.kind, o.name, JSON.stringify(roles), this.now());
+				this.db.prepare("INSERT INTO actors (realm_id, id, kind, name, roles, profile, created_at) VALUES (?,?,?,?,?,?,?)").run(realmId, o.id, o.kind, o.name, JSON.stringify(roles), JSON.stringify(profile), this.now());
 				this.db.prepare("INSERT INTO presence (realm_id, actor_id, state, echo, updated_at) VALUES (?,?,?,0,?)").run(realmId, o.id, o.kind === "human" ? "active" : "idle", this.now());
 			}
 			this.emit(realmId, cur ? "actor.updated" : "actor.joined", by, "actor", o.id, { kind: o.kind, name: o.name, roles });
@@ -153,7 +154,7 @@ export class Core {
 
 	getActor(realmId: Id, id: Id): Actor | undefined {
 		const r = this.db.prepare("SELECT * FROM actors WHERE realm_id = ? AND id = ?").get(realmId, id) as Row | undefined;
-		return r ? { realmId, id: r.id, kind: r.kind, name: r.name, roles: JSON.parse(r.roles), createdAt: r.created_at } : undefined;
+		return r ? { realmId, id: r.id, kind: r.kind, name: r.name, roles: JSON.parse(r.roles), profile: JSON.parse(r.profile), createdAt: r.created_at } : undefined;
 	}
 
 	/** An actor that must be a member of the realm. The membership check every mutation starts with. */
