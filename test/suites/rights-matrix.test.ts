@@ -13,7 +13,7 @@ before(async () => {
 	dm = await dmOf(t, t.users.operator!);
 	kase = await caseOf(t, t.users.operator!, `matrix case ${Date.now()}`);
 });
-after(() => t.close());
+after(async () => { await t.call(t.users.operator!, "POST", `/spaces/${kase}/archive`).catch(() => {}); await t.close(); });
 
 const roles = () => ROLES.filter((r) => t.users[r]);
 type Want = Partial<Record<Role, number>>;

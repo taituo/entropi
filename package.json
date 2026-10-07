@@ -10,8 +10,10 @@
     "start": "node src/server.ts",
     "demo": "node src/server.ts",
     "typecheck": "tsc -p .",
-    "test": "node --test test/*.test.ts",
-    "test:live": "node --test --test-concurrency=1 test/live/*.live.ts"
+    "test": "node --test test/*.test.ts test/suites/*.test.ts",
+    "test:live": "node --test --test-concurrency=1 test/live/*.live.ts",
+    "test:cluster": "scripts/test-cluster.sh",
+    "test:ui": "scripts/ui-smoke.sh"
   },
   "dependencies": {
     "@earendil-works/chord": "1.0.4",

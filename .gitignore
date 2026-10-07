@@ -6,3 +6,4 @@ dist/
 .DS_Store
 ._*
 .deploy.env
+ui-smoke-shots/
