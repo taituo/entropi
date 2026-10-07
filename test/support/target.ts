@@ -78,7 +78,8 @@ async function offlineTarget(): Promise<Target> {
 	const app: App = createApp({ core, config: cfg, control: () => control, sandboxes: () => ({ list: () => [], stop: async (k) => { calls.sandboxStop.push(k); return true; } }) });
 	await new Promise<void>((r) => app.server.listen(0, r));
 	const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
-	const roleOf = (u: string) => Object.entries(ROLE_USERS).find(([, v]) => v === u)?.[0] ?? "viewer";
+	// "approver:second" is another user with the approver role
+	const roleOf = (u: string) => u.includes(":") ? u.split(":")[0] : Object.entries(ROLE_USERS).find(([, v]) => v === u)?.[0] ?? "viewer";
 	const hdr = (u: string) => ({ "x-user": u, "x-roles": roleOf(u) });
 	return {
 		mode: "offline", users: ROLE_USERS, core, calls,
