@@ -27,7 +27,7 @@ test("5. a real model writes and runs code in the sandbox, and the sandbox is ai
 		obs("5 answer", r.text);
 		obs("5 tools", (r.meta.activity as any[]).map((a) => `${a.name}:${a.status}`));
 		assert.match(r.text, /0 1 1 2 3 5 8 13 21 34 55 89/);
-		assert.ok((r.meta.activity as any[]).some((a) => a.name === "sbx_exec" && a.status === "done"));
+		assert.ok((r.meta.activity as any[]).some((a) => a.name === "bash" && a.status === "done"));
 		assert.match(r.text, /fail|not work|couldn.t|could not|unable|no network|unreachable|resolve|error|didn.t|did not/i, "the model reports that the internet is not reachable");
 	} finally {
 		await w.close();

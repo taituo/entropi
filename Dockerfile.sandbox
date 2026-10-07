@@ -3,6 +3,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git python3 jq 
  && rm -rf /var/lib/apt/lists/* \
  && useradd -u 10001 -m -s /bin/sh sandbox && mkdir /work && chown sandbox /work
 COPY sandbox/runner.mjs /opt/runner.mjs
+# Pi's own execution environment (plain JS, no dependencies): the runner is a thin RPC around it.
+COPY node_modules/@earendil-works/pi-durable/dist/env /opt/pi-env
 USER 10001
 WORKDIR /work
 EXPOSE 8099

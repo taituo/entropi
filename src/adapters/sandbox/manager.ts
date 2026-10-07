@@ -54,7 +54,7 @@ export class SandboxManager {
 			for (let i = 0; i < 90; i++) {
 				st = await this.backend.inspect(name);
 				if (st.state === "failed") throw new Error(`sandbox failed to start: ${st.detail ?? ""}`);
-				if (st.state === "running" && st.endpoint && (await callRunner(st.endpoint, row!.token, "GET", "/health", undefined, 2000).then(() => true, () => false))) break;
+				if (st.state === "running" && st.endpoint && (await callRunner(st.endpoint, row!.token, "/health", undefined, { timeoutMs: 2000 }).then(() => true, () => false))) break;
 				await sleep(300);
 			}
 			if (st.state !== "running" || !st.endpoint) throw new Error("sandbox did not become ready in time");
@@ -63,10 +63,6 @@ export class SandboxManager {
 		})().finally(() => this.starting.delete(key));
 		this.starting.set(key, p);
 		return p;
-	}
-
-	call<T = any>(sb: Sandbox, method: "GET" | "POST" | "PUT", path: string, body?: string | object, timeoutMs?: number): Promise<T> {
-		return callRunner<T>(sb.endpoint, sb.token, method, path, body, timeoutMs);
 	}
 
 	async stop(key: string): Promise<boolean> {

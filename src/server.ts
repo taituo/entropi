@@ -13,7 +13,8 @@ import { seedRealm } from "./seed.ts";
 import { inCluster, KubeSandbox } from "./adapters/sandbox/kube.ts";
 import { SandboxManager } from "./adapters/sandbox/manager.ts";
 import { PodmanSandbox } from "./adapters/sandbox/podman.ts";
-import { sandboxExtension } from "./adapters/sandbox/tools.ts";
+import { sandboxEnvResolver } from "./adapters/sandbox/env.ts";
+import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { sandboxConfig as sbx } from "./config.ts";
 
 const core = new Core(openDb(join(config.dataDir, "entropi.sqlite")));
@@ -39,7 +40,9 @@ let dispatcher;
 if (inference.providers.length) {
 	runtime = new PiRuntime({
 		core, storage: await openNodeSqliteStorage(join(config.dataDir, "pi.sqlite")), inference, live, images: createUploads(join(config.dataDir, "uploads")),
-		extensions: sandboxes ? [sandboxExtension({ core, manager: sandboxes, locate: (id) => runtime?.locate(id) })] : [],
+		// Pi's own coding tools (read, write, edit, bash); with a sandbox they run in it, without one they fail plainly.
+		extensions: [CodingTools],
+		env: sandboxes ? sandboxEnvResolver({ core, manager: sandboxes, locate: (id) => runtime?.locate(id) }) : undefined,
 	});
 	await runtime.start();
 	dispatcher = runtime;

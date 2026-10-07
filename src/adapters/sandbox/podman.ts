@@ -6,6 +6,8 @@ import type { SandboxBackend, SandboxState } from "./backend.ts";
 
 const RUNNER = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "sandbox", "runner.mjs");
 const LABEL = "app=entropi-sandbox";
+/** Pi's own execution environment (a few plain JS files, no dependencies), mounted read-only: the runner is a thin RPC around it. */
+const PI_ENV = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-durable/env/node")));
 
 const run = (args: string[], timeoutMs = 60_000): Promise<{ code: number; out: string; err: string }> =>
 	new Promise((res) => execFile("podman", args, { timeout: timeoutMs, maxBuffer: 4 << 20 }, (e: any, out, err) => res({ code: e ? (typeof e.code === "number" ? e.code : 1) : 0, out: String(out), err: String(err) })));
@@ -52,7 +54,7 @@ export class PodmanSandbox implements SandboxBackend {
 			"--tmpfs", "/tmp:rw,size=256m,mode=1777", "--tmpfs", "/work:rw,size=1g,mode=0777",
 			"--cap-drop=ALL", "--security-opt", "no-new-privileges", "--pids-limit", "256", "--memory", this.o.memory, "--cpus", this.o.cpus,
 			"--timeout", String(this.o.maxSeconds), "--network", this.o.network === "none" ? "none" : "pasta",
-			"-v", `${this.socketDir(a.name)}:/sock`, "-v", `${RUNNER}:/opt/runner.mjs:ro`,
+			"-v", `${this.socketDir(a.name)}:/sock`, "-v", `${RUNNER}:/opt/runner.mjs:ro`, "-v", `${PI_ENV}:/opt/pi-env:ro`,
 			"-e", `RUNNER_TOKEN=${a.token}`, "-e", "WORK_DIR=/work", "-e", "LISTEN_SOCKET=/sock/runner.sock",
 			a.image, "node", "/opt/runner.mjs",
 		];

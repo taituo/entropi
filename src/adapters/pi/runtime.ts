@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, type Conversation, type ConversationView, type EntryRecord, type Extension, type Storage, type SubmissionId } from "@earendil-works/pi-durable";
+import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { handleOf } from "../../core/core.ts";
 import type { Core } from "../../core/core.ts";
 import type { AgentControl, AgentDispatcher } from "../../core/ports.ts";
@@ -28,6 +29,8 @@ export type PiRuntimeOptions = {
 	/** Pushed for every streaming update of an agent message (never logged, never replayed). */
 	live?: (m: Message) => void;
 	extensions?: Extension[];
+	/** Pi's execution environment for a conversation (what the coding tools read, write and run in). None: those tools fail with an ordinary error. */
+	env?: (conversationId: unknown) => ExecutionEnv | undefined;
 	memory?: OptChat;
 	viewBytes?: number;
 	keepRecentTokens?: number;
@@ -89,7 +92,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		this.extByName.set(own.name, own);
 		for (const e of this.opts.extensions ?? []) { registry.install(e); this.extByName.set(e.name, e); }
 		this.harness = await Harness.open(this.storage, {
-			models: this.opts.inference.models, registry,
+			models: this.opts.inference.models, registry, env: ({ conversationId }: any) => this.opts.env?.(conversationId),
 			settings: { toolExecution: "parallel", retry: { maxRetries: 2 }, stream: { timeoutMs: 180_000 }, compaction: { enabled: true, keepRecentTokens: this.opts.keepRecentTokens ?? 20_000 }, ...this.opts.settings } as any,
 		}, ctx);
 		this.setupSummarizer();

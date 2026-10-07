@@ -19,27 +19,30 @@ export interface SandboxBackend {
 	list(): Promise<string[]>;
 }
 
-/** One call to the runner inside a sandbox, over TCP or a unix socket. */
-export function callRunner<T = any>(ep: Endpoint, token: string, method: "GET" | "POST" | "PUT", path: string, body?: string | object, timeoutMs = 20_000): Promise<T> {
+/**
+ * One call to the runner inside a sandbox, over TCP or a unix socket. The answer is a stream of JSON lines (command output
+ * as it happens, then the result) or a single JSON object; `onLine` sees each, the promise resolves with the last.
+ */
+export function callRunner<T = any>(ep: Endpoint, token: string, path: string, body?: object, o: { onLine?: (line: any) => void; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
 	return new Promise((resolve, reject) => {
-		const payload = body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body);
+		const payload = body === undefined ? undefined : JSON.stringify(body);
 		const req = request({
-			...(ep.kind === "unix" ? { socketPath: ep.socketPath } : { host: ep.host, port: ep.port }),
-			path, method, timeout: timeoutMs,
-			headers: { authorization: `Bearer ${token}`, ...(typeof body === "object" ? { "content-type": "application/json" } : {}), ...(payload ? { "content-length": Buffer.byteLength(payload) } : {}) },
+			...(ep.kind === "unix" ? { socketPath: ep.socketPath } : { host: ep.host, port: ep.port }), path, method: payload ? "POST" : "GET", signal: o.signal, timeout: o.timeoutMs ?? 30_000,
+			headers: { authorization: `Bearer ${token}`, ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}) },
 		}, (res) => {
-			const chunks: Buffer[] = [];
-			res.on("data", (c) => chunks.push(c));
+			let buf = "", last: any;
+			const line = (l: string) => { if (l.trim()) { last = JSON.parse(l); o.onLine?.(last); } };
+			res.setEncoding("utf8");
+			res.on("data", (c: string) => { buf += c; for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) { line(buf.slice(0, i)); buf = buf.slice(i + 1); } });
+			res.on("error", reject);
 			res.on("end", () => {
-				let data: any = {};
-				try { data = JSON.parse(Buffer.concat(chunks).toString() || "{}"); } catch { /* not JSON */ }
-				if ((res.statusCode ?? 500) >= 300) return reject(Object.assign(new Error(data.error ?? `runner HTTP ${res.statusCode}`), { status: res.statusCode }));
-				resolve(data as T);
+				try { line(buf); } catch { /* not JSON */ }
+				if ((res.statusCode ?? 500) >= 300) return reject(Object.assign(new Error(last?.error ?? `runner HTTP ${res.statusCode}`), { status: res.statusCode }));
+				resolve(last as T);
 			});
 		});
 		req.on("timeout", () => req.destroy(new Error("sandbox request timed out")));
 		req.on("error", reject);
-		if (payload) req.write(payload);
-		req.end();
+		req.end(payload);
 	});
 }

@@ -8,7 +8,8 @@ import { DispatchPump } from "../src/runtime/pump.ts";
 import { seedRealm } from "../src/seed.ts";
 import { PodmanSandbox } from "../src/adapters/sandbox/podman.ts";
 import { SandboxManager } from "../src/adapters/sandbox/manager.ts";
-import { sandboxExtension } from "../src/adapters/sandbox/tools.ts";
+import { sandboxEnvResolver } from "../src/adapters/sandbox/env.ts";
+import { CodingTools } from "@earendil-works/pi-durable/tools";
 
 export const until = async (fn: () => boolean, ms = 8000) => {
 	const t = Date.now();
@@ -49,12 +50,12 @@ export function scriptedModel(gate = makeGate()) {
 		const mine = lastRole(ctx);
 		if (/\bsandbox\b/.test(text)) {
 			const n = resultsSoFar(ctx);
-			if (n === 0) return fauxAssistantMessage([fauxToolCall("sbx_write", { path: "hello.py", content: 'print("sum", sum(range(10)))' })], { stopReason: "toolUse" });
-			if (n === 1) return fauxAssistantMessage([fauxToolCall("sbx_exec", { command: "python3 hello.py" })], { stopReason: "toolUse" });
+			if (n === 0) return fauxAssistantMessage([fauxToolCall("write", { path: "hello.py", content: 'print("sum", sum(range(10)))' })], { stopReason: "toolUse" });
+			if (n === 1) return fauxAssistantMessage([fauxToolCall("bash", { command: "python3 hello.py" })], { stopReason: "toolUse" });
 			return fauxAssistantMessage(`done: ${lastResultText(ctx).replace(/\s+/g, " ").slice(0, 160)}`);
 		}
 		if (/\bcountrun\b/.test(text)) {
-			if (resultsSoFar(ctx) === 0) return fauxAssistantMessage([fauxToolCall("sbx_exec", { command: "echo x >> /work/count.txt; wc -l < /work/count.txt" })], { stopReason: "toolUse" });
+			if (resultsSoFar(ctx) === 0) return fauxAssistantMessage([fauxToolCall("bash", { command: "echo x >> /work/count.txt; wc -l < /work/count.txt" })], { stopReason: "toolUse" });
 			return fauxAssistantMessage(`done: ${lastResultText(ctx).replace(/\s+/g, " ").slice(0, 200)}`);
 		}
 		if (mine === "toolResult") {
@@ -84,13 +85,14 @@ export async function makeWorld(o: { sandboxDir?: string; dbPath: string; storag
 		: buildInference({ airgapped: true, defaultModel: "faux/scripted", perAgent: {} }, [{ id: "faux", provider: faux.provider }]);
 	const live: string[] = [];
 	let sandbox: SandboxManager | undefined;
-	const extensions: any[] = [];
+	const extensions: any[] = [CodingTools];
+	let env: ((id: unknown) => any) | undefined;
 	if (o.sandboxDir) {
 		sandbox = new SandboxManager({ db: core.db, backend: new PodmanSandbox({ dir: o.sandboxDir }), image: process.env.SANDBOX_TEST_IMAGE ?? "localhost/crew-sandbox:dev", max: 3 });
-		extensions.push(sandboxExtension({ core, manager: sandbox, locate: (id) => runtimeRef.current?.locate(id) }));
+		env = sandboxEnvResolver({ core, manager: sandbox, locate: (id: unknown) => runtimeRef.current?.locate(id) });
 	}
 	const runtimeRef: { current?: PiRuntime } = {};
-	const runtime = new PiRuntime({ core, storage: o.storage, inference, live: (m) => live.push(m.text), extensions, ...o.runtime });
+	const runtime = new PiRuntime({ core, storage: o.storage, inference, live: (m) => live.push(m.text), extensions, env, ...o.runtime });
 	runtimeRef.current = runtime;
 	const pump = new DispatchPump(core, runtime);
 	return { core, runtime, pump, faux, gate, live, sandbox, start: async () => { await runtime.start(); pump.start(); }, close: async () => { pump.stop(); await runtime.close(); } };
