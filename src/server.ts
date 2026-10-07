@@ -10,12 +10,25 @@ import { createApp } from "./http/app.ts";
 import { DispatchPump } from "./runtime/pump.ts";
 import { createUploads } from "./http/uploads.ts";
 import { seedRealm } from "./seed.ts";
+import { inCluster, KubeSandbox } from "./adapters/sandbox/kube.ts";
+import { SandboxManager } from "./adapters/sandbox/manager.ts";
+import { PodmanSandbox } from "./adapters/sandbox/podman.ts";
+import { sandboxExtension } from "./adapters/sandbox/tools.ts";
+import { sandboxConfig as sbx } from "./config.ts";
 
 const core = new Core(openDb(join(config.dataDir, "entropi.sqlite")));
 seedRealm(core, config.defaultRealm);
 // The runtime needs the app's live push, so the app asks for the runtime lazily.
 let runtime: PiRuntime | undefined;
-const app = createApp({ core, config, control: () => runtime });
+// Sandboxes: in the cluster a pod, on a plain machine a rootless podman container with no network. Neither is required.
+let sandboxes: SandboxManager | undefined;
+const kind = sbx.backend === "auto" ? (inCluster() ? "kube" : (await PodmanSandbox.available()) ? "podman" : "none") : sbx.backend;
+if (kind === "kube") sandboxes = new SandboxManager({ db: core.db, backend: new KubeSandbox({ namespace: sbx.namespace }), image: sbx.image, max: sbx.max, idleMin: sbx.idleMin });
+if (kind === "podman") sandboxes = new SandboxManager({ db: core.db, backend: new PodmanSandbox({ dir: join(config.dataDir, "sandboxes"), network: sbx.network }), image: sbx.image, max: sbx.max, idleMin: sbx.idleMin });
+sandboxes?.startSweeper();
+console.log(`sandbox: ${sandboxes ? `${kind}${kind === "podman" ? `, network ${sbx.network}` : ""}, image ${sbx.image}` : "none (agents get no sandbox tools)"}`);
+
+const app = createApp({ core, config, control: () => runtime, sandboxes: () => sandboxes });
 const live = (m: import("./core/types.ts").Message) => app.hub.live({ realmId: m.realmId, spaceId: m.spaceId, type: "message", message: m });
 
 // Models: a local OpenAI-compatible endpoint first (works fully airgapped); cloud providers only when explicitly
@@ -24,7 +37,10 @@ const inferenceCfg = inferenceFromEnv(process.env);
 const inference = buildInference(inferenceCfg);
 let dispatcher;
 if (inference.providers.length) {
-	runtime = new PiRuntime({ core, storage: await openNodeSqliteStorage(join(config.dataDir, "pi.sqlite")), inference, live, images: createUploads(join(config.dataDir, "uploads")) });
+	runtime = new PiRuntime({
+		core, storage: await openNodeSqliteStorage(join(config.dataDir, "pi.sqlite")), inference, live, images: createUploads(join(config.dataDir, "uploads")),
+		extensions: sandboxes ? [sandboxExtension({ core, manager: sandboxes, locate: (id) => runtime?.locate(id) })] : [],
+	});
 	await runtime.start();
 	dispatcher = runtime;
 	console.log(`agents: Pi Durable, providers=${inference.providers.join(",")}${inferenceCfg.airgapped ? " (airgapped)" : ""}`);

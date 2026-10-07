@@ -53,6 +53,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 	readonly builder: TreeBuilder;
 	harness!: Harness;
 	private opts: PiRuntimeOptions;
+	private extByName = new Map<string, Extension>();
 	private convs = new Map<string, Conversation>(); // binding key -> conversation
 	private locs = new Map<string, Loc>(); // conversation id -> binding
 	private creating = new Map<string, Promise<Conversation>>();
@@ -82,8 +83,10 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 			consultModel: (id: unknown) => { const loc = this.locs.get(String(id)); return this.opts.inference.summarizer() ?? (loc ? this.modelFor(loc) : undefined); },
 			waitDecision: (realm: Id, id: Id, signal?: AbortSignal) => this.waitDecision(realm, id, signal),
 		};
-		registry.install(entropiExtension(host));
-		for (const e of this.opts.extensions ?? []) registry.install(e);
+		const own = entropiExtension(host);
+		registry.install(own);
+		this.extByName.set(own.name, own);
+		for (const e of this.opts.extensions ?? []) { registry.install(e); this.extByName.set(e.name, e); }
 		this.harness = await Harness.open(this.storage, {
 			models: this.opts.inference.models, registry,
 			settings: { toolExecution: "parallel", retry: { maxRetries: 2 }, stream: { timeoutMs: 180_000 }, compaction: { enabled: true, keepRecentTokens: this.opts.keepRecentTokens ?? 20_000 }, ...this.opts.settings } as any,
@@ -164,6 +167,12 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		return `${base}\n\n${where}`;
 	}
 
+	/** The extensions (tool sets) an agent is given, by name from its profile. No list means everything installed. */
+	private extensionsFor(loc: Loc): Extension[] | undefined {
+		const names = this.core.getActor(loc.realmId, loc.agentId)?.profile.extensions as string[] | undefined;
+		return names ? names.map((n) => this.extByName.get(n)).filter((e): e is Extension => !!e) : undefined;
+	}
+
 	private modelFor(loc: Loc): ModelRef {
 		const ref = this.opts.inference.resolve(handleOf(loc.agentId));
 		if (!ref) throw new Error(`no model configured for ${handleOf(loc.agentId)}: set LOCAL_LLM_BASE_URL+LOCAL_LLM_MODEL, INFERENCE_DEFAULT or AGENT_${handleOf(loc.agentId).toUpperCase()}_MODEL`);
@@ -180,7 +189,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		const p = (async () => {
 			const conv = await this.harness.createConversation({
 				ownership: { kind: "ownerless" },
-				agent: { model: this.modelFor(loc), instructions: this.instructionsFor(loc) },
+				agent: { model: this.modelFor(loc), instructions: this.instructionsFor(loc), ...(this.extensionsFor(loc) ? { extensions: this.extensionsFor(loc) } : {}) },
 				// Same commit as the conversation itself: it can never exist unbound.
 				init: async (tx, id) => {
 					const d = await tx.doc(Binding, id);
@@ -200,7 +209,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		const want = this.modelFor(loc);
 		const have = (await conv.agent(ctx).catch(() => undefined))?.model as ModelRef | undefined;
 		if (have && (have.provider !== want.provider || have.modelId !== want.modelId)) await conv.configure({ model: want }, ctx);
-		await conv.configure({ instructions: this.instructionsFor(loc) }, ctx);
+		await conv.configure({ instructions: this.instructionsFor(loc), ...(this.extensionsFor(loc) ? { extensions: this.extensionsFor(loc) } : {}) }, ctx);
 	}
 
 	// ------------------------------------------------------------------ dispatch (core outbox -> Pi submission)

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Core } from "../core/core.ts";
 import type { AgentControl } from "../core/ports.ts";
 import type { Config } from "../config.ts";
-import { api, ensureMember, eventView, json, statusOf } from "./api.ts";
+import { api, ensureMember, eventView, json, statusOf, type SandboxControl } from "./api.ts";
 import { createAuth } from "./auth.ts";
 import { Hub } from "./sse.ts";
 import { createUploads } from "./uploads.ts";
@@ -32,11 +32,11 @@ async function serveStatic(res: import("node:http").ServerResponse, pathname: st
 export type App = { server: Server; hub: Hub; close(): void };
 
 /** The HTTP transport over the core. No listen here: the caller decides the port, tests use an ephemeral one. */
-export function createApp(o: { core: Core; config: Config; control?: () => AgentControl | undefined }): App {
+export function createApp(o: { core: Core; config: Config; control?: () => AgentControl | undefined; sandboxes?: () => SandboxControl | undefined }): App {
 	const { core, config } = o;
 	const auth = createAuth(config);
 	const hub = new Hub(core, (e) => eventView(core, e));
-	const deps = { core, hub, control: o.control, uploads: createUploads(join(config.dataDir, "uploads")), config };
+	const deps = { core, hub, control: o.control, sandboxes: o.sandboxes, uploads: createUploads(join(config.dataDir, "uploads")), config };
 
 	const server = createServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", config.publicUrl);

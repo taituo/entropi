@@ -25,7 +25,9 @@ const control = {
 	memtree: () => ({ leaves: 3, nodes: 1, llmNodes: 1, pending: 0, viewBytes: 6000, view: [] }),
 	usage: async () => ({ models: {}, tools: {} }),
 };
-const app = createApp({ core, config: cfg, control: () => control });
+const sbxList = [{ key: "main:general", createdAt: 1, lastUsed: 2 }, { key: "main:dm-ops-dev-alice", createdAt: 1, lastUsed: 2 }];
+const stopped: string[] = [];
+const app = createApp({ core, config: cfg, control: () => control, sandboxes: () => ({ list: () => sbxList, stop: async (k: string) => { stopped.push(k); return true; } }) });
 const pump = new DispatchPump(core, dispatcher);
 pump.start();
 await new Promise<void>((r) => app.server.listen(0, r));
@@ -198,4 +200,15 @@ test("stop, compact, memory view and usage: who may, and only for agents you can
 	assert.equal((await stop(bob, dm, "ops")).status, 404, "nobody else can reach into a private chat");
 	assert.equal((await call(bob, "GET", "/api/realms/main/usage")).status, 403);
 	assert.deepEqual((await call(alice, "GET", "/api/realms/main/usage")).body.usage, { models: {}, tools: {} });
+});
+
+test("sandboxes: listed only for spaces you can see; stopping needs the operator role and a visible space", async () => {
+	const dm = (await call(alice, "POST", "/api/realms/main/dms", { agent: "ops" })).body.space.id;
+	sbxList[1].key = `main:${dm}`;
+	assert.deepEqual((await call(bob, "GET", "/api/realms/main/sandboxes")).body.sandboxes.map((x: any) => x.spaceId), ["general"], "someone else's private chat sandbox is not listed");
+	assert.deepEqual((await call(alice, "GET", "/api/realms/main/sandboxes")).body.sandboxes.map((x: any) => x.spaceId), ["general", dm]);
+	assert.equal((await call(carol, "POST", "/api/realms/main/spaces/general/sandbox/stop", {})).status, 403);
+	assert.equal((await call(bob, "POST", `/api/realms/main/spaces/${dm}/sandbox/stop`, {})).status, 404);
+	assert.equal((await call(bob, "POST", "/api/realms/main/spaces/general/sandbox/stop", {})).status, 200);
+	assert.deepEqual(stopped, ["main:general"]);
 });

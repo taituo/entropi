@@ -75,7 +75,8 @@ export function eventView(core: Core, e: ActivityEvent): { type: string; payload
 	return { type: "event", payload: e };
 }
 
-export type Deps = { core: Core; hub: Hub; uploads: Uploads; control?: () => AgentControl | undefined; config: Pick<Config, "brand" | "defaultRealm"> };
+export type SandboxControl = { list(): { key: string; createdAt: number; lastUsed: number }[]; stop(key: string): Promise<boolean> };
+export type Deps = { core: Core; hub: Hub; uploads: Uploads; control?: () => AgentControl | undefined; sandboxes?: () => SandboxControl | undefined; config: Pick<Config, "brand" | "defaultRealm"> };
 
 /** All routes live under /api/realms/:realm; a person who is not a member gets 404, never 403. */
 export async function api(req: IncomingMessage, res: ServerResponse, url: URL, user: User, d: Deps) {
@@ -172,6 +173,23 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 			if (!hasRole(me, "operator")) throw httpError(403, "operators only");
 			return json(res, 200, r[3] === "stop" ? await ctl.stop(o) : await ctl.compact(o));
 		}
+	}
+
+	if (m === "GET" && rest === "/sandboxes") {
+		const sb = d.sandboxes?.();
+		const prefix = `${realmId}:`;
+		const rows = (sb?.list() ?? []).filter((x) => x.key.startsWith(prefix) && core.canSee(realmId, me.id, x.key.slice(prefix.length)));
+		return json(res, 200, { available: !!sb, sandboxes: rows.map((x) => ({ spaceId: x.key.slice(prefix.length), createdAt: x.createdAt, lastUsed: x.lastUsed })) });
+	}
+
+	if (m === "POST" && (r = /^\/spaces\/([\w-]+)\/sandbox\/stop$/.exec(rest))) {
+		if (!core.canSee(realmId, me.id, r[1])) throw httpError(404, "no such space");
+		if (!hasRole(me, "operator")) throw httpError(403, "operators only");
+		const sb = d.sandboxes?.();
+		if (!sb) throw httpError(501, "no sandbox backend is configured");
+		const stopped = await sb.stop(`${realmId}:${r[1]}`);
+		core.record(realmId, me.id, "sandbox.stopped", "space", r[1], { spaceId: r[1] });
+		return json(res, 200, { stopped });
 	}
 
 	if (m === "GET" && rest === "/usage") {

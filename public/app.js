@@ -320,6 +320,7 @@ function App() {
 	const [toast, setToast] = useState("");
 	const [usage, setUsage] = useState(undefined);
 	const [navOpen, setNavOpen] = useState(false);
+	const [sandboxes, setSandboxes] = useState([]);
 	const tl = useRef();
 	const stick = useRef(true);
 	const spaceRef = useRef(spaceId);
@@ -349,6 +350,8 @@ function App() {
 			document.title = who.brand.name;
 			document.documentElement.style.setProperty("--accent", who.brand.accent);
 			loadFocus();
+			const loadSbx = () => !document.hidden && api(R("/sandboxes")).then((d) => setSandboxes(d.sandboxes)).catch(() => {});
+			loadSbx(); setInterval(loadSbx, 15000);
 			if (perms.approve) api(R("/usage")).then((u) => setUsage(u.usage)).catch(() => setUsage(null)); else setUsage(undefined);
 		})();
 	}, []);
@@ -427,6 +430,7 @@ function App() {
 			<div class="header">
 				<button class="navbtn" aria-label="Channels" onClick=${() => setNavOpen(!navOpen)}>☰</button>
 				<h2>${space.kind === "dm" ? "🔒 " + space.name : space.kind === "case" ? "◆ " + space.name : "# " + space.name}</h2><span class="topic">${space.topic}</span>
+				${sandboxes.find((x) => x.spaceId === space.id) && html`<span class="chip sbx" title="An isolated container where agents run commands. Removed after 30 min idle.">🧪 sandbox · idle ${Math.max(0, Math.round((Date.now() - sandboxes.find((x) => x.spaceId === space.id).lastUsed) / 60000))}m ${me.perms.operate ? html`<button class="linkbtn" onClick=${() => api(R(`/spaces/${space.id}/sandbox/stop`), { body: {} }).then(() => setSandboxes((c) => c.filter((x) => x.spaceId !== space.id))).catch((e) => flash(e.message))}>stop</button>` : ""}</span>`}
 				${space.kind === "case" && me.perms.operate && html`<button class="btn small" onClick=${() => archive(space.id, space.status === "open")}>${space.status === "open" ? "Archive case" : "Reopen"}</button>`}
 				${usage === null ? html`<span class="pill demo" title="No model runtime is connected; agents follow a script.">scripted agents</span>` : usage && html`<span class="pill" title=${Object.entries(usage.models).map(([k, v]) => k + ": " + v.input + " in / " + v.output + " out").join("\n")}>tokens ${Object.values(usage.models).reduce((n, v) => n + v.input + v.output, 0).toLocaleString()}</span>`}
 			</div>

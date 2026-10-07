@@ -7,10 +7,10 @@ import { Binding } from "../../src/adapters/pi/binding.ts";
 
 const [dir, action, arg] = process.argv.slice(2);
 const storage = await openNodeSqliteStorage(join(dir, "pi.sqlite"));
-const w = await makeWorld({ dbPath: join(dir, "core.sqlite"), storage, real: process.env.LIVE === "1" });
+const w = await makeWorld({ dbPath: join(dir, "core.sqlite"), storage, real: process.env.LIVE === "1", sandboxDir: process.env.SBX_DIR });
 
 if (action === "post") {
-	w.core.postMessage("main", "incidents", "human:anna", { text: arg, dispatchTo: ["agent:ops"] });
+	w.core.postMessage("main", "incidents", "human:anna", { text: arg, dispatchTo: [process.env.AGENT ?? "agent:ops"] });
 }
 await w.start();
 if (action === "decide") {

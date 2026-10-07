@@ -31,4 +31,15 @@ export const config = {
 		logoutUrl: env.AUTH_LOGOUT_URL ?? "",
 	},
 };
+
+export const sandboxConfig = {
+	/** auto: the cluster when running in one, else podman on this machine if it is installed, else none. */
+	backend: (env.SANDBOX_BACKEND ?? "auto") as "auto" | "podman" | "kube" | "none",
+	image: env.SANDBOX_IMAGE ?? "localhost/entropi-sandbox:dev",
+	/** none (default): the sandbox has no network at all. public: outbound web via pasta (it can also reach your LAN: only on hosts you trust). AIRGAPPED=true forces none. */
+	network: (env.AIRGAPPED === "true" ? "none" : (env.SANDBOX_NETWORK ?? "none")) as "none" | "public",
+	max: num(env.SANDBOX_MAX, 2),
+	idleMin: num(env.SANDBOX_IDLE_MIN, 30),
+	namespace: env.SANDBOX_NAMESPACE ?? "ai-sandboxes",
+};
 export type Config = typeof config;
