@@ -193,3 +193,16 @@ test("steer: a person's message can join a run in progress instead of queueing b
 	assert.equal(new Set(texts.filter((t) => /^echo:/.test(t))).size, texts.filter((t) => /^echo:/.test(t)).length, "no answer text is shown twice");
 	await w.close();
 });
+
+test("memory_zoom is an agent tool: a line of the memory view opens back to the original message", async () => {
+	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage() });
+	await w.start();
+	ask(w.core, "@ops the codename is BLUEHERON, remember it");
+	await until(() => replies(w.core).some((r: any) => r.status === "done"));
+	ask(w.core, "@ops zoom #0.0 please");
+	await until(() => replies(w.core).filter((r: any) => r.status === "done").length === 2);
+	const r = replies(w.core)[1];
+	assert.deepEqual(r.meta.activity.map((a: any) => a.name), ["memory_zoom"]);
+	assert.match(r.text, /#0\.0 user at .*BLUEHERON/s, "the original words, not a summary");
+	await w.close();
+});

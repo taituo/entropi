@@ -100,7 +100,7 @@ export function entropiExtension(host: ToolHost) {
 
 	const memoryZoom = defineTool({
 		name: "memory_zoom",
-		description: "Expand one line of the compressed memory view (an id like #2.5) into finer detail or, at level 0, the original message.",
+		description: "Expand one line of the compressed memory view (an id like #2.5) into finer detail or, at level 0, the original message. Summaries lose exact details; when you need a name, number or id from earlier, call this repeatedly, going down level by level to the #0.x original.",
 		parameters: Type.Object({ id: Type.String({ description: 'Line id, e.g. "#2.5"' }) }),
 		replay: "safe",
 		execute: async (args, api) => {

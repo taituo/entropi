@@ -30,9 +30,9 @@ test("3. OptChat with a real summariser and Pi compaction: an early fact survive
 	obs("3 tree", stats);
 	assert.ok(stats.leaves >= 26, `leaves recorded (${stats.leaves})`);
 	assert.ok(stats.llmNodes >= 1, "the real model wrote at least one summary node");
-	const sample = w.core.db.prepare("SELECT level, idx, quality, text FROM memnodes WHERE thread = ? AND quality = 'llm' ORDER BY level, idx LIMIT 3").all(thread);
+	const sample = w.runtime.memory.db.prepare("SELECT level, idx, quality, text FROM memnodes WHERE thread = ? AND quality = 'llm' ORDER BY level, idx LIMIT 3").all(thread);
 	obs("3 sample llm summaries", sample.map((r: any) => `${r.level}.${r.idx}: ${r.text}`));
-	const first = w.core.db.prepare("SELECT text FROM memnodes WHERE thread = ? AND level = 1 AND idx = 0").get(thread) as any;
+	const first = w.runtime.memory.db.prepare("SELECT text FROM memnodes WHERE thread = ? AND level = 1 AND idx = 0").get(thread) as any;
 	obs("3 first node keeps the early fact?", { text: first?.text, hasCodename: /BLUEHERON/.test(first?.text ?? ""), hasIncident: /4417/.test(first?.text ?? "") });
 
 	const c = await w.runtime.compact({ realmId: "main", spaceId: "incidents", agentId: "agent:ops", by: "human:anna" });

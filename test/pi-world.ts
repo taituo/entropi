@@ -54,6 +54,8 @@ export function scriptedModel(gate = makeGate()) {
 			if (n === 1) return fauxAssistantMessage([fauxToolCall("bash", { command: "python3 hello.py" })], { stopReason: "toolUse" });
 			return fauxAssistantMessage(`done: ${lastResultText(ctx).replace(/\s+/g, " ").slice(0, 160)}`);
 		}
+		const zoom = /\bzoom (#\d+\.\d+)/.exec(text);
+		if (zoom) return resultsSoFar(ctx) === 0 ? fauxAssistantMessage([fauxToolCall("memory_zoom", { id: zoom[1] })], { stopReason: "toolUse" }) : fauxAssistantMessage(`done: ${lastResultText(ctx)}`);
 		if (/\bk8sfix\b/.test(text)) {
 			const n = resultsSoFar(ctx);
 			if (n === 0) return fauxAssistantMessage([fauxToolCall("k8s_pods", { namespace: "demo-apps" })], { stopReason: "toolUse" });

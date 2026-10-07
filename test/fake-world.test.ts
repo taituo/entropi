@@ -58,14 +58,14 @@ test("ops reads the cluster, asks a human before changing it, and sees the fix t
 	w.core.postMessage("main", "incidents", "human:anna", { text: "@ops k8sfix checkout", dispatchTo: ["agent:ops"] });
 	await until(() => w.core.openDecisions("main").length === 1);
 	const card = w.core.openDecisions("main")[0];
-	assert.deepEqual((card.context as any).changes, [{ key: "POOL_SIZE", from: "0", to: "10" }], "the card shows the exact before/after");
+	assert.deepEqual((card as any).context.changes, [{ key: "POOL_SIZE", from: "0", to: "10" }], "the card shows the exact before/after");
 	assert.equal((await world.query("deployment/demo-apps/checkout-api")).state, "unhealthy", "nothing changed before the decision");
 	w.core.decide("main", card.id, "human:anna", "approve", "go");
 	const reply = () => w.core.listMessages("main", "incidents", "human:anna").find((m: any) => m.kind === "agent")!;
 	await until(() => reply().status === "done");
 	assert.equal((await world.query("deployment/demo-apps/checkout-api")).state, "healthy");
 	assert.match(reply().text, /checkout-api-\S+ 1\/1 Running restarts=0/, "the agent's last look at the cluster shows the fix");
-	assert.deepEqual(reply().meta.activity.map((a: any) => a.name), ["k8s_pods", "k8s_apply_configmap", "k8s_pods"]);
+	assert.deepEqual((reply().meta.activity as any[]).map((a: any) => a.name), ["k8s_pods", "k8s_apply_configmap", "k8s_pods"]);
 	await w.close();
 });
 
