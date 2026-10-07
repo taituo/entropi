@@ -11,6 +11,8 @@ export class TreeBuilder {
 	readonly memory: OptChat;
 	summarize?: Summarizer;
 	gapMs = 1500;
+	/** A summary that takes longer than this counts as failed (a hung model must not stall the queue forever). */
+	summarizeTimeoutMs = 90_000;
 	/** The newest this-many leaves stay verbatim in every view, so blocks touching them need no summary yet. */
 	recentVerbatim = 16;
 	log: (m: string) => void = () => {};
@@ -47,6 +49,12 @@ export class TreeBuilder {
 		for (let level = 1; 2 ** level <= n; level++) for (let idx = 0; (idx + 1) * 2 ** level <= n; idx++) if (!have.has(`${level}:${idx}`)) this.enqueue(thread, level, idx);
 	}
 
+	private withTimeout<T>(p: Promise<T>): Promise<T> {
+		let timer: NodeJS.Timeout;
+		const limit = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("summary timed out")), this.summarizeTimeoutMs); });
+		return Promise.race([p, limit]).finally(() => clearTimeout(timer));
+	}
+
 	get pending() {
 		return this.queue.length;
 	}
@@ -74,7 +82,7 @@ export class TreeBuilder {
 				}
 				let text: string, quality = "llm";
 				try {
-					text = this.summarize ? clip(await this.summarize(kids as string[], job.level), NODE_BYTES + 40) : extractive(kids as string[]);
+					text = this.summarize ? clip(await this.withTimeout(this.summarize(kids as string[], job.level)), NODE_BYTES + 40) : extractive(kids as string[]);
 					if (!this.summarize) quality = "x";
 					if (!text) throw new Error("empty summary");
 					if (this.summarize) await new Promise((r) => setTimeout(r, this.gapMs));
