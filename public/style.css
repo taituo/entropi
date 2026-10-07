@@ -74,7 +74,7 @@ a { color: var(--text); }
 .badge { background: var(--fill-active); color: #fff; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 0 7px; margin-left: auto; }
 .me { margin-top: auto; padding: 12px 14px; border-top: var(--border); display: flex; align-items: center; gap: 10px; }
 .me .who { min-width: 0; flex: 1; }
-.me .who b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.me .who b { display: block; }
 .me .who span { color: var(--muted); font-size: 12px; }
 .linkbtn { background: none; border: 0; color: var(--muted); padding: 4px 6px; border-radius: 6px; }
 .linkbtn:hover { color: var(--text); background: var(--fill-active-row); }
@@ -82,8 +82,12 @@ a { color: var(--text); }
 .avatar { width: 32px; height: 32px; border-radius: var(--radius); display: grid; place-items: center; background: var(--bg); color: var(--text); border: var(--border); font-weight: 700; flex: none; font-size: 13px; }
 .avatar.human { border-radius: var(--radius-round); }
 
-.header { padding: 12px 20px; border-bottom: var(--border); border-radius: 0; display: flex; align-items: baseline; gap: 12px; background: var(--panel); }
+.header { padding: 12px 20px; border-bottom: var(--border); border-radius: 0; display: flex; align-items: baseline; gap: 12px; background: var(--panel); position: relative; }
 .header h2 { margin: 0; font-size: 16px; }
+/* The header rule runs under the right panel too, like the reference. */
+@media (min-width: 1101px) {
+	.header::after { content: ""; position: absolute; top: 100%; left: 0; width: calc(100% + 320px); border-top: var(--border); pointer-events: none; }
+}
 .header .topic { color: var(--muted); }
 .header .pill { margin-left: auto; font-size: 12px; color: var(--text); border: var(--border-thin); border-radius: var(--radius); padding: 2px 10px; background: var(--bg); }
 .header .pill.demo { color: var(--text); border-color: var(--line); }

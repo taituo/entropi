@@ -53,7 +53,7 @@ ok("an approval card appears for the operator", true);
 ok("operator sees that only an approver can decide", (await bob.locator(".needs-approver").count()) === 1);
 ok("operator has no approve button", (await bob.locator(".btn.approve").count()) === 0);
 ok("agent activity steps are shown", (await bob.locator(".activity").count()) >= 1);
-ok("focus panel lists what needs people", /needs you/i.test(await bob.locator(".ctx-pin").innerText()));
+ok("focus panel lists what needs people", /pending approval/i.test(await bob.locator(".ctx-pin").innerText()));
 await sleep(bob, 600);
 await shot(bob, "ui-01-operator-sees-approval.png");
 
@@ -62,7 +62,7 @@ const alice = await open("alice");
 await alice.goto(`${BASE}/#incidents`); await alice.reload(); await alice.waitForSelector(".timeline .card.pending");
 ok("approver sees Approve and Reject", (await alice.locator(".btn.approve").count()) === 1 && (await alice.locator(".btn.reject").count()) === 1);
 ok("the needs-you list has the question", /POOL_SIZE/.test(await alice.locator(".ctx-pin").innerText()));
-await alice.fill(".card input", "ok, go ahead");
+ok("the note field shows an empty placeholder", (await alice.locator(".card input").getAttribute("placeholder")) === "Note (optional)" && (await alice.locator(".card input").inputValue()) === "");
 await shot(alice, "ui-02-approver-view.png");
 await alice.click(".btn.approve");
 await alice.waitForSelector(".card.approved", { timeout: 10000 });

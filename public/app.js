@@ -13,7 +13,11 @@ const api = async (path, opts = {}) => {
 };
 
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-const initials = (n) => n.split(/\s+/).filter((w) => /^\p{L}/u.test(w)).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
+const initials = (n) => n.replace(/[()]/g, "").split(/\s+/).filter((w) => /^\p{L}/u.test(w)).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
+/** Sidebar and panel agent order: Ops first, then Developer, Reviewer, Insight; anything new sorts after, alphabetically. */
+const AGENT_FIRST = ["ops", "developer", "reviewer", "insight"];
+const agentRank = (a) => { const i = AGENT_FIRST.indexOf((a.handle || "").toLowerCase()); return i < 0 ? AGENT_FIRST.length : i; };
+const agentOrder = (list) => list.slice().sort((x, y) => agentRank(x) - agentRank(y) || x.name.localeCompare(y.name));
 const time = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /** Small, safe markdown: everything is escaped first, then fences, code, bold and mentions are added back. */
@@ -167,7 +171,7 @@ function DecisionCard({ m, me, onDecide }) {
 		<div class="body">
 			<div class="meta"><b>${m.authorName}</b><span class="role">agent</span><time>${time(m.createdAt)}</time></div>
 			<div class=${"card " + STATUS_CLASS(m)}>
-				<h5>Decision needed${m.meta.urgency === "high" ? " · urgent" : ""}</h5>
+				<h5>Approval required${m.meta.urgency === "high" ? " · urgent" : ""}</h5>
 				<div class="title">${m.text}</div>
 				<dl class="kv">
 					${d.target && html`<dt>Target</dt><dd>${d.target}</dd>`}
@@ -285,7 +289,7 @@ function MemTree({ R, spaceId, agent, canOperate, caps, onFlash }) {
 function AgentCard({ a, presence, R, spaceId, canOperate, caps, onStop, onFlash }) {
 	const p = presence[a.id] || { state: "idle" };
 	const status = p.state === "waiting" ? "waiting_approval" : p.state === "working" ? "working" : "idle";
-	const label = { idle: "Idle", working: "Working", waiting_approval: "Waiting for a decision" }[status];
+	const label = { idle: "Idle", working: "Working", waiting_approval: "Waiting for approval" }[status];
 	return html`<details class="agentcard">
 		<summary><div class="top"><${Avatar} agent=${a} name=${a.name} /><div><b>${a.name}</b><span>${a.profile.title || ""} · <span class=${"dot " + status} style="display:inline-block"></span> ${label}</span></div></div></summary>
 		<ul>${(a.profile.can || []).map((c) => html`<li class="can">${c}</li>`)}${(a.profile.cannot || []).map((c) => html`<li class="cannot">${c}</li>`)}</ul>
@@ -299,8 +303,8 @@ function FocusPanel({ focus, open }) {
 	if (!focus) return null;
 	const nothing = !focus.needsYou.length && !focus.attention.length && !focus.working.length && !focus.waiting.length;
 	return html`<div class="ctx-pin">
-		<h3>Needs you ${focus.needsYou.length ? html`<span class="badge">${focus.needsYou.length}</span>` : ""}</h3>
-		${focus.needsYou.length === 0 ? html`<div class="empty">Nothing needs you.</div>` : focus.needsYou.map((n) => html`<div class="apitem" key=${n.decision.id}>
+		<h3>Pending approvals ${focus.needsYou.length ? html`<span class="badge">${focus.needsYou.length}</span>` : ""}</h3>
+		${focus.needsYou.length === 0 ? html`<div class="empty">No pending approvals.</div>` : focus.needsYou.map((n) => html`<div class="apitem" key=${n.decision.id}>
 			<b>${n.decision.question}</b>${n.decision.urgency === "high" && html` <span class="chip">urgent</span>`}
 			${n.spaceId && html`<div><button class="btn" onClick=${() => open(n.spaceId)}>Open #${n.spaceId}</button></div>`}</div>`)}
 		${focus.attention.length > 0 && html`<h3>Needs attention</h3>${focus.attention.map((a) => html`<div class="note" key=${a.id}><span class=${"chip " + (a.kind === "failure" ? "st-failed" : "")}>${a.kind}</span> ${a.summary}</div>`)}`}
@@ -389,7 +393,7 @@ function App() {
 
 	const open = spaces.filter((c) => c.status === "open");
 	const space = spaces.find((c) => c.id === spaceId) || open[0] || { id: "general", name: "general", topic: "", agents: [], kind: "standing", status: "open" };
-	const spAgents = (space.agentIds || []).map((id) => me.agentsById[id]).filter(Boolean);
+	const spAgents = agentOrder((space.agentIds || []).map((id) => me.agentsById[id]).filter(Boolean));
 	const go = (s) => { setSpaces((cur) => (cur.some((c) => c.id === s.id) ? cur : [...cur, s])); setSpaceId(s.id); };
 	const createCase = async (e) => {
 		e.preventDefault();
@@ -426,7 +430,7 @@ function App() {
 				${open.filter((c) => c.kind === "dm").length === 0 && html`<div class="empty" style="padding:2px 10px">Click an agent below to chat privately.</div>`}
 			</div>
 			<div class="section"><h4>Agents</h4>
-				${me.agents.map((a) => html`<button class="item" title=${"Private chat with " + a.name + " — " + a.title} onClick=${() => me.perms.operate && openDm(a.handle)}><span class=${"dot " + status(a)}></span>${a.name}<span class="sub">${{ idle: "idle", working: "working", waiting_approval: "needs a decision" }[status(a)]}</span></button>`)}
+				${agentOrder(me.agents).map((a) => html`<button class="item" title=${"Private chat with " + a.name + " — " + a.title} onClick=${() => me.perms.operate && openDm(a.handle)}><span class=${"dot " + status(a)}></span>${a.name}<span class="sub">${{ idle: "idle", working: "working", waiting_approval: "needs approval" }[status(a)]}</span></button>`)}
 			</div>
 			</div>
 			<div class="me"><${Avatar} name=${me.user.name} human=${true} /><div class="who"><b>${me.user.name}</b><span>${me.roleLabel}</span></div><a class="linkbtn" href="/auth/logout" title="Sign out">Sign out</a></div>
@@ -437,9 +441,9 @@ function App() {
 				<h2>${space.kind === "dm" ? "🔒 " + space.name : space.kind === "case" ? "◆ " + space.name : "# " + space.name}</h2><span class="topic">${space.topic}</span>
 				${sandboxes.find((x) => x.spaceId === space.id) && html`<span class="chip sbx" title="An isolated container where agents run commands. Removed after 30 min idle.">🧪 sandbox · idle ${Math.max(0, Math.round((Date.now() - sandboxes.find((x) => x.spaceId === space.id).lastUsed) / 60000))}m ${me.perms.operate ? html`<button class="linkbtn" onClick=${() => api(R(`/spaces/${space.id}/sandbox/stop`), { body: {} }).then(() => setSandboxes((c) => c.filter((x) => x.spaceId !== space.id))).catch((e) => flash(e.message))}>stop</button>` : ""}</span>`}
 				${space.kind === "case" && me.perms.operate && html`<button class="btn small" onClick=${() => archive(space.id, space.status === "open")}>${space.status === "open" ? "Archive case" : "Reopen"}</button>`}
-				${usage === null ? html`<span class="pill demo" title="No model runtime is connected; agents follow a script.">scripted agents</span>` : usage && html`<span class="pill" title=${Object.entries(usage.models).map(([k, v]) => k + ": " + v.input + " in / " + v.output + " out").join("\n")}>tokens ${Object.values(usage.models).reduce((n, v) => n + v.input + v.output, 0).toLocaleString()}</span>`}
+				${usage && html`<span class="pill" title=${Object.entries(usage.models).map(([k, v]) => k + ": " + v.input + " in / " + v.output + " out").join("\n")}>tokens ${Object.values(usage.models).reduce((n, v) => n + v.input + v.output, 0).toLocaleString()}</span>`}
 			</div>
-			${(focus?.needsYou || []).some((n) => n.spaceId === space.id) && html`<div class="banner">⚠ ${focus.needsYou.filter((n) => n.spaceId === space.id).length} decision waiting: <b>${focus.needsYou.find((n) => n.spaceId === space.id).decision.question}</b> — scroll down to the card.</div>`}
+			${(focus?.needsYou || []).some((n) => n.spaceId === space.id) && html`<div class="banner">⚠ ${focus.needsYou.filter((n) => n.spaceId === space.id).length} approval waiting: <b>${focus.needsYou.find((n) => n.spaceId === space.id).decision.question}</b> — scroll down to the card.</div>`}
 			<div class="timeline" ref=${tl} onScroll=${(e) => { const t = e.target; stick.current = t.scrollHeight - t.scrollTop - t.clientHeight < 80; }}>
 				${messages.map((m) => html`<${Message} key=${m.id} m=${m} me=${me} agentIds=${agentIds} onDecide=${decide} onAction=${(a) => a.type === "message" && send(a.text)} />`)}
 			</div>
