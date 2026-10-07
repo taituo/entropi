@@ -3,7 +3,7 @@ import { AssistantEntry, CompactionTask, configure, defineExtension, defineTool,
 import { handleOf } from "../../core/core.ts";
 import { failpoint } from "../../runtime/failpoint.ts";
 import type { Core } from "../../core/core.ts";
-import type { OptChat } from "../../core/optchat.ts";
+import type { OptChat } from "../../memory/optchat.ts";
 import type { DecisionRequest, Id } from "../../core/types.ts";
 
 /** What the agent-facing tools need from the runtime, as an interface so tools stay testable and the runtime stays swappable. */

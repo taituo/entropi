@@ -44,16 +44,9 @@ CREATE INDEX events_realm ON events(realm_id, seq);
 CREATE TRIGGER events_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 `,
-	// OptChat memory tree: a rebuildable derivative of a conversation's transcript. `thread` is an opaque runtime conversation id.
-	`
-CREATE TABLE memleaves (
-  thread TEXT NOT NULL, idx INTEGER NOT NULL, entry_id INTEGER NOT NULL, role TEXT NOT NULL,
-  raw TEXT NOT NULL, text TEXT NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY (thread, idx));
-CREATE UNIQUE INDEX memleaves_entry ON memleaves(thread, entry_id);
-CREATE TABLE memnodes (
-  thread TEXT NOT NULL, level INTEGER NOT NULL, idx INTEGER NOT NULL, text TEXT NOT NULL, quality TEXT NOT NULL,
-  PRIMARY KEY (thread, level, idx));
-`,
+	// (was: the OptChat memory tables. They moved to src/memory, which creates them itself in its own database; databases
+	// that already have them keep working. Kept as an empty step so every later migration keeps its number.)
+	`SELECT 1;`,
 	// Spaces (channels), messages, and the links from work/decisions into a space.
 	`
 CREATE TABLE spaces (

@@ -260,7 +260,7 @@ function Composer({ space, agents, canPost, onSend, R, busy: agentBusy }) {
 	</div>`;
 }
 
-function MemTree({ R, spaceId, agent, canOperate, onFlash }) {
+function MemTree({ R, spaceId, agent, canOperate, caps, onFlash }) {
 	const [info, setInfo] = useState(null);
 	const [busy, setBusy] = useState(false);
 	const load = () => api(R(`/spaces/${spaceId}/agents/${agent.handle}/memtree`)).then(setInfo).catch(() => setInfo({ unavailable: true }));
@@ -278,19 +278,19 @@ function MemTree({ R, spaceId, agent, canOperate, onFlash }) {
 		${info?.unavailable && html`<div class="ui-sub">No model runtime is connected.</div>`}
 		${info && !info.unavailable && html`<div class="ui-sub">${info.leaves} messages · ${info.nodes} summaries (${info.llmNodes} by model, ${info.pending} pending) · view ${info.view.length} lines, ≤ ${info.viewBytes} B</div>
 			<div class="mtview">${info.view.slice(-40).map((l) => html`<div class="mtl"><code>${l.id}</code> <span class="ui-sub">${l.msgs > 1 ? l.msgs + " msgs" : l.role}</span> ${l.text}</div>`)}</div>`}
-		${canOperate && html`<button class="btn small" disabled=${busy} onClick=${compact}>${busy ? "Compacting…" : "Compact now"}</button>`}
+		${canOperate && caps.compact && html`<button class="btn small" disabled=${busy} onClick=${compact}>${busy ? "Compacting…" : "Compact now"}</button>`}
 	</details>`;
 }
 
-function AgentCard({ a, presence, R, spaceId, canOperate, onStop, onFlash }) {
+function AgentCard({ a, presence, R, spaceId, canOperate, caps, onStop, onFlash }) {
 	const p = presence[a.id] || { state: "idle" };
 	const status = p.state === "waiting" ? "waiting_approval" : p.state === "working" ? "working" : "idle";
 	const label = { idle: "Idle", working: "Working", waiting_approval: "Waiting for a decision" }[status];
 	return html`<details class="agentcard">
 		<summary><div class="top"><${Avatar} agent=${a} name=${a.name} /><div><b>${a.name}</b><span>${a.profile.title || ""} · <span class=${"dot " + status} style="display:inline-block"></span> ${label}</span></div></div></summary>
 		<ul>${(a.profile.can || []).map((c) => html`<li class="can">${c}</li>`)}${(a.profile.cannot || []).map((c) => html`<li class="cannot">${c}</li>`)}</ul>
-		<${MemTree} R=${R} spaceId=${spaceId} agent=${a} canOperate=${canOperate} onFlash=${onFlash} />
-		${canOperate && status !== "idle" && html`<button class="btn stopbtn" onClick=${() => onStop(a)}>Stop</button>`}
+		${caps.memtree && html`<${MemTree} R=${R} spaceId=${spaceId} agent=${a} canOperate=${canOperate} caps=${caps} onFlash=${onFlash} />`}
+		${canOperate && caps.stop && status !== "idle" && html`<button class="btn stopbtn" onClick=${() => onStop(a)}>Stop</button>`}
 	</details>`;
 }
 
@@ -344,6 +344,7 @@ function App() {
 			setMe({
 				user: { name: d.me.name, id: d.me.id }, brand: who.brand, realm: d.realm, agents, agentsById: Object.fromEntries(agents.map((a) => [a.id, a])), perms,
 				roleLabel: perms.admin ? "admin" : perms.approve ? "approver" : perms.operate ? "operator" : "viewer",
+				caps: d.capabilities,
 				canDecide: (m) => perms.approve && (m.meta.requiredAuthority !== "admin" || perms.admin),
 				R,
 			});
@@ -352,9 +353,10 @@ function App() {
 			document.title = who.brand.name;
 			document.documentElement.style.setProperty("--accent", who.brand.accent);
 			loadFocus();
-			const loadSbx = () => !document.hidden && api(R("/sandboxes")).then((d) => setSandboxes(d.sandboxes)).catch(() => {});
-			loadSbx(); setInterval(loadSbx, 15000);
-			if (perms.approve) api(R("/usage")).then((u) => setUsage(u.usage)).catch(() => setUsage(null)); else setUsage(undefined);
+			// Only what the connected runtime and host support is asked for, and later shown.
+			const caps = d.capabilities;
+			if (caps.sandboxes) { const loadSbx = () => !document.hidden && api(R("/sandboxes")).then((x) => setSandboxes(x.sandboxes)).catch(() => {}); loadSbx(); setInterval(loadSbx, 15000); }
+			if (perms.approve && caps.usage) api(R("/usage")).then((u) => setUsage(u.usage)).catch(() => setUsage(null)); else setUsage(perms.approve ? null : undefined);
 		})();
 	}, []);
 
@@ -446,7 +448,7 @@ function App() {
 			<${FocusPanel} focus=${focus} open=${setSpaceId} />
 			<div class="ctx-scroll">
 				<h3>Agents in ${space.kind === "dm" ? space.name : "#" + space.name}</h3>
-				${spAgents.map((a) => html`<${AgentCard} key=${a.id} a=${a} presence=${presence} R=${R} spaceId=${space.id} canOperate=${me.perms.operate} onStop=${stop} onFlash=${flash} />`)}
+				${spAgents.map((a) => html`<${AgentCard} key=${a.id} a=${a} presence=${presence} R=${R} spaceId=${space.id} canOperate=${me.perms.operate} caps=${me.caps} onStop=${stop} onFlash=${flash} />`)}
 			</div>
 		</aside>
 		${toast && html`<div class="toast">${toast}</div>`}

@@ -220,6 +220,8 @@ Näistä fokusvalinnat, paluun kuittaukset, edustajan toimivalta ja tiedon jakam
 
 #### Nykyisen coren rajaongelmat
 
+Päivitys 7.10.2026, commit `7503572` ja sen työpuu: roolien muuttamisen admin-raja, päätöksen työn näkyvyys ja määräajan tarkistus on lisätty koodiin. Alla ensimmäiset kolme kohtaa kuvaavat aiempaa havaintoa, jonka korjaus näkyy nyt koodissa; tässä ei ajettu korjausten testejä. [Uusi yhteensopivuusarvio](compatibility-notes.md) erottaa jäljellä olevat ydintarpeet palveluista ja adaptereista.
+
 Edeltävässä tarkastuksessa todettiin suorilla core-kutsuilla:
 
 - `addActor` sallii tavallisen jäsenen muuttaa omat roolinsa adminiksi.
@@ -271,6 +273,8 @@ Omistajan tavoite on kokeilla hyvää päättelyketjua ja kontekstin voimaa, sek
 ## Pi-projektien yhteys tähän karttaan
 
 [Pi-ekosysteemin katsaus](pi-projects.md) kokoaa verkosta tutkitut projektit samoihin ergonomian, työn ja teknologian näkökulmiin. Se erottaa viralliset rakennuspalikat, valmiit sovellukset ja yhteisön laajennukset sekä arvioi niiden suhdetta Entropiin.
+
+[Puuttuvat yhteydet ja yhteensopivuus](compatibility-notes.md) tarkastelee nykyisen koodin perusteella työn ja suorituksen yhteyttä, yhteistä komentorajaa, hyväksytyn toiminnon sitomista, ulkoista totuutta ja usean käyttöpinnan palautumista.
 
 ## Käytännön reitti kohti alkuperäistä hyötyä
 

@@ -20,6 +20,18 @@ export const hasRole = (a: Pick<Actor, "roles">, role: string): boolean =>
 type Row = Record<string, any>;
 export type Listener = (e: ActivityEvent) => void;
 
+export interface Trusted {
+	pendingOutbox(limit?: number): OutboxItem[];
+	markOutbox(id: number, status: "sent" | "failed", error?: string): void;
+	bumpOutbox(id: number, error: string): number;
+	cancelOutboxFromRun(runId: string, reason: string): number;
+	workingMessages(): Message[];
+	expireDecisions(): number;
+	findMessage(id: number): Message | undefined;
+	messageByRequest(requestId: string): Message | undefined;
+	messagesWithMeta(path: string, value: string | number, o?: { kind?: MessageKind; status?: Message["status"]; limit?: number }): Message[];
+}
+
 /**
  * The whole domain behind one small surface. Rules enforced here, not in clients or adapters:
  *  - every read and write is scoped by realm; nothing crosses a realm boundary
@@ -432,7 +444,7 @@ export class Core {
 	}
 
 	/** Expire open decisions whose deadline passed. Call from a timer; the core never runs one itself. */
-	expireDecisions(): number {
+	private expireDecisions(): number {
 		return this.tx(() => {
 			const rows = this.db.prepare("SELECT * FROM decisions WHERE status = 'open' AND expires_at IS NOT NULL AND expires_at <= ?").all(this.now()) as Row[];
 			for (const r of rows) {
@@ -670,29 +682,29 @@ export class Core {
 	}
 
 	/** Hand-overs not yet confirmed by a runtime, oldest first. The runtime must be idempotent per (message, agent). */
-	pendingOutbox(limit = 50): OutboxItem[] {
+	private pendingOutbox(limit = 50): OutboxItem[] {
 		const rows = this.db.prepare(`SELECT o.id, o.realm_id, o.message_id, o.agent_id, o.depth, o.attempts, m.space_id, m.text, m.author_id
 			FROM outbox o JOIN messages m ON m.realm_id = o.realm_id AND m.id = o.message_id WHERE o.status = 'pending' ORDER BY o.id LIMIT ?`).all(limit) as Row[];
 		return rows.map((r) => ({ id: r.id, realmId: r.realm_id, messageId: r.message_id, spaceId: r.space_id, agentId: r.agent_id, depth: r.depth, text: r.text, from: r.author_id, attempts: r.attempts }));
 	}
 
-	markOutbox(id: number, status: "sent" | "failed", error?: string) {
+	private markOutbox(id: number, status: "sent" | "failed", error?: string) {
 		this.db.prepare("UPDATE outbox SET status = ?, error = ?, done_at = ? WHERE id = ?").run(status, error ?? null, this.now(), id);
 	}
 
-	bumpOutbox(id: number, error: string): number {
+	private bumpOutbox(id: number, error: string): number {
 		this.db.prepare("UPDATE outbox SET attempts = attempts + 1, error = ? WHERE id = ?").run(error, id);
 		return (this.db.prepare("SELECT attempts FROM outbox WHERE id = ?").get(id) as Row).attempts;
 	}
 
 	/** The message with this id if it is still being written. */
-	findMessage(messageId: number): Message | undefined {
+	private findMessage(messageId: number): Message | undefined {
 		const r = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(messageId) as Row | undefined;
 		return r ? rowToMessage(r) : undefined;
 	}
 
 	/** Withdraw hand-overs that were queued by one run (stop propagating down a delegation chain). Returns how many. */
-	cancelOutboxFromRun(runId: string, reason: string): number {
+	private cancelOutboxFromRun(runId: string, reason: string): number {
 		const rows = this.db.prepare(`SELECT o.id FROM outbox o JOIN messages m ON m.realm_id = o.realm_id AND m.id = o.message_id
 			WHERE o.status = 'pending' AND json_extract(m.meta, '$.runId') = ?`).all(runId) as Row[];
 		for (const r of rows) this.markOutbox(r.id, "failed", reason);
@@ -700,7 +712,7 @@ export class Core {
 	}
 
 	/** Agent messages still being written: what a restarted runtime has to pick up again. */
-	workingMessages(): Message[] {
+	private workingMessages(): Message[] {
 		return (this.db.prepare("SELECT * FROM messages WHERE status = 'working' ORDER BY id").all() as Row[]).map(rowToMessage);
 	}
 
@@ -802,6 +814,37 @@ export class Core {
 		if (!hasRole(a, d.requiredAuthority)) return false;
 		return !(policy.separationOfDuties && d.requestedBy === a.id);
 	}
+	/** The reply row or any message by its idempotency key (unique per realm; keys embed ids, so they do not collide across realms). */
+	private messageByRequest(requestId: string): Message | undefined {
+		const r = this.db.prepare("SELECT * FROM messages WHERE request_id = ?").get(requestId) as Row | undefined;
+		return r ? rowToMessage(r) : undefined;
+	}
+
+	/** Messages whose `meta` holds `value` at a dotted path (e.g. "pi.thread"), newest first. The path is validated, never interpolated. */
+	private messagesWithMeta(path: string, value: string | number, o: { kind?: MessageKind; status?: Message["status"]; limit?: number } = {}): Message[] {
+		if (!/^[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)*$/.test(path)) throw invalid("bad meta path");
+		const rows = this.db.prepare(`SELECT * FROM messages WHERE json_extract(meta, '$.${path}') = ? AND (? IS NULL OR kind = ?) AND (? IS NULL OR status = ?) ORDER BY id DESC LIMIT ?`)
+			.all(value, o.kind ?? null, o.kind ?? null, o.status ?? null, o.status ?? null, o.limit ?? 50) as Row[];
+		return rows.map(rowToMessage);
+	}
+
+	/**
+	 * The trusted surface: what the machinery AROUND the actors needs (delivery of hand-overs, timers, lookups for a runtime).
+	 * None of it checks who is asking, because nobody asks: it is held only by code the operator wrote (the dispatch pump, the
+	 * agent runtime adapter, the server's timer). Hand a transport or a tool the `Core` type and none of this is reachable.
+	 */
+	readonly trusted: Trusted = {
+		pendingOutbox: (limit) => this.pendingOutbox(limit),
+		markOutbox: (id, status, error) => this.markOutbox(id, status, error),
+		bumpOutbox: (id, error) => this.bumpOutbox(id, error),
+		cancelOutboxFromRun: (runId, reason) => this.cancelOutboxFromRun(runId, reason),
+		workingMessages: () => this.workingMessages(),
+		expireDecisions: () => this.expireDecisions(),
+		findMessage: (id) => this.findMessage(id),
+		messageByRequest: (requestId) => this.messageByRequest(requestId),
+		messagesWithMeta: (path, value, o) => this.messagesWithMeta(path, value, o),
+	};
+
 }
 
 // ------------------------------------------------------------------ row mappers

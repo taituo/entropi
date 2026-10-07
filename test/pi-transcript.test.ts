@@ -4,7 +4,7 @@ import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { AssistantEntry, createSession, MemoryStorage, ToolResultEntry, UserEntry } from "@earendil-works/pi-durable";
 import { PiTranscript, leafOf } from "../src/adapters/pi/transcript.ts";
 import { openDb } from "../src/core/db.ts";
-import { OptChat } from "../src/core/optchat.ts";
+import { OptChat, openMemoryDb } from "../src/memory/optchat.ts";
 
 const ts = 1_700_000_000_000;
 const tsOf = (i: number) => ts + i * 60_000;
@@ -45,7 +45,7 @@ test("the whole history is read in order from Pi's paged scanEntries, even with 
 
 test("OptChat is rebuilt from Pi storage alone, and catch-up after a restart adds only new entries", async () => {
 	const { storage, session, thread } = await history(4);
-	const mem = new OptChat(openDb(":memory:"));
+	const mem = new OptChat(openMemoryDb(":memory:"));
 	const src = new PiTranscript(storage, ctx);
 	assert.equal(await mem.sync(thread, src), 12);
 	assert.equal(mem.leafCount(thread), 12);
@@ -63,7 +63,7 @@ test("entries before a context reset stay readable, so the memory keeps what the
 	await session.commit(async (tx) => {
 		await tx.appendEntry(UserEntry, Number(thread) as any, { ...user("after reset"), head: "self" } as any);
 	}, ctx);
-	const mem = new OptChat(openDb(":memory:"));
+	const mem = new OptChat(openMemoryDb(":memory:"));
 	assert.equal(await mem.sync(thread, new PiTranscript(storage, ctx)), 10, "9 old entries + the one after the reset");
 	assert.match(mem.zoom(thread, "#0.0"), /question 0/);
 });
@@ -87,7 +87,7 @@ test("rebuilt memory keeps each message's real time, not the time of the rebuild
 		await tx.appendEntry(UserEntry, conv.id, { model: [{ role: "user", content: "old question", timestamp: tsOf(0) }] } as any);
 		await tx.appendEntry(AssistantEntry, conv.id, { model: [{ role: "assistant", content: [{ type: "text", text: "old answer" }], timestamp: tsOf(1) }] } as any);
 	}, ctx);
-	const mem = new OptChat(openDb(":memory:"));
+	const mem = new OptChat(openMemoryDb(":memory:"));
 	await mem.sync(String(conv.id), new PiTranscript(storage, ctx));
 	assert.deepEqual((mem.db.prepare("SELECT ts FROM memleaves WHERE thread = ? ORDER BY idx").all(String(conv.id)) as any[]).map((r) => r.ts), [tsOf(0), tsOf(1)]);
 	assert.match(mem.zoom(String(conv.id), "#0.0"), /at 2023-11-14/, "the date shown is the original one");

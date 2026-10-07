@@ -69,9 +69,9 @@ test("1d. ask_agent with a real model: delegation message, the other agent answe
 	obs("1d developer", agentMsgs(w.core, "agent:developer")[0].text.slice(0, 300));
 	assert.equal(del[0].authorId, "agent:ops");
 	assert.equal(del[0].meta.to, "developer", "the first hand-over is the one that was asked for");
-	await until(() => w.core.workingMessages().length === 0 && w.core.pendingOutbox().length === 0 && w.pump.idle().constructor === Promise, 100_000);
+	await until(() => w.core.trusted.workingMessages().length === 0 && w.core.trusted.pendingOutbox().length === 0 && w.pump.idle().constructor === Promise, 100_000);
 	await w.pump.idle();
-	assert.equal(w.core.workingMessages().length, 0, "the chain ended on its own");
+	assert.equal(w.core.trusted.workingMessages().length, 0, "the chain ended on its own");
 	const perRun = new Map<string, number>();
 	for (const e of w.core.events("main").filter((x) => x.type === "delegation.requested")) perRun.set(String(e.data.runId), (perRun.get(String(e.data.runId)) ?? 0) + 1);
 	obs("1d delegations per run", [...perRun.values()]);

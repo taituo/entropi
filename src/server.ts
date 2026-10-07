@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { config } from "./config.ts";
@@ -9,6 +10,7 @@ import { PiRuntime } from "./adapters/pi/runtime.ts";
 import { createApp } from "./http/app.ts";
 import { DispatchPump } from "./runtime/pump.ts";
 import { createUploads } from "./http/uploads.ts";
+import { OptChat, openMemoryDb } from "./memory/optchat.ts";
 import { seedRealm } from "./seed.ts";
 import { inCluster, KubeSandbox } from "./adapters/sandbox/kube.ts";
 import { SandboxManager } from "./adapters/sandbox/manager.ts";
@@ -23,9 +25,10 @@ seedRealm(core, config.defaultRealm);
 let runtime: PiRuntime | undefined;
 // Sandboxes: in the cluster a pod, on a plain machine a rootless podman container with no network. Neither is required.
 let sandboxes: SandboxManager | undefined;
+const sandboxDb = new DatabaseSync(join(config.dataDir, "sandboxes.sqlite")); // the sandbox registry is the adapter's own: tokens and names of running containers
 const kind = sbx.backend === "auto" ? (inCluster() ? "kube" : (await PodmanSandbox.available()) ? "podman" : "none") : sbx.backend;
-if (kind === "kube") sandboxes = new SandboxManager({ db: core.db, backend: new KubeSandbox({ namespace: sbx.namespace }), image: sbx.image, max: sbx.max, idleMin: sbx.idleMin });
-if (kind === "podman") sandboxes = new SandboxManager({ db: core.db, backend: new PodmanSandbox({ dir: join(config.dataDir, "sandboxes"), network: sbx.network }), image: sbx.image, max: sbx.max, idleMin: sbx.idleMin });
+if (kind === "kube") sandboxes = new SandboxManager({ db: sandboxDb, backend: new KubeSandbox({ namespace: sbx.namespace }), image: sbx.image, max: sbx.max, idleMin: sbx.idleMin });
+if (kind === "podman") sandboxes = new SandboxManager({ db: sandboxDb, backend: new PodmanSandbox({ dir: join(config.dataDir, "sandboxes"), network: sbx.network }), image: sbx.image, max: sbx.max, idleMin: sbx.idleMin });
 sandboxes?.startSweeper();
 console.log(`sandbox: ${sandboxes ? `${kind}${kind === "podman" ? `, network ${sbx.network}` : ""}, image ${sbx.image}` : "none (agents get no sandbox tools)"}`);
 
@@ -39,7 +42,7 @@ const inference = buildInference(inferenceCfg);
 let dispatcher;
 if (inference.providers.length) {
 	runtime = new PiRuntime({
-		core, storage: await openNodeSqliteStorage(join(config.dataDir, "pi.sqlite")), inference, live, images: createUploads(join(config.dataDir, "uploads")),
+		core, storage: await openNodeSqliteStorage(join(config.dataDir, "pi.sqlite")), inference, live, memory: new OptChat(openMemoryDb(join(config.dataDir, "memory.sqlite"))), images: createUploads(join(config.dataDir, "uploads")),
 		// Pi's own coding tools (read, write, edit, bash); with a sandbox they run in it, without one they fail plainly.
 		extensions: [CodingTools],
 		env: sandboxes ? sandboxEnvResolver({ core, manager: sandboxes, locate: (id) => runtime?.locate(id) }) : undefined,
@@ -56,6 +59,6 @@ if (inference.providers.length) {
 const pump = new DispatchPump(core, dispatcher);
 pump.start();
 
-const timer = setInterval(() => core.expireDecisions(), 30_000);
+const timer = setInterval(() => core.trusted.expireDecisions(), 30_000);
 app.server.listen(config.port, () => console.log(`${config.brand.name} listening on :${config.port} (auth=${config.auth.mode}, realm=${config.defaultRealm})`));
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, async () => { clearInterval(timer); pump.stop(); app.close(); await runtime?.close(); process.exit(0); });

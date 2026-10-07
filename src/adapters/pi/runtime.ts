@@ -5,7 +5,8 @@ import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { handleOf } from "../../core/core.ts";
 import type { Core } from "../../core/core.ts";
 import type { AgentControl, AgentDispatcher } from "../../core/ports.ts";
-import { OptChat, SUMMARY_SYSTEM, TreeBuilder } from "../../core/optchat.ts";
+import { OptChat, openMemoryDb, SUMMARY_SYSTEM } from "../../memory/optchat.ts";
+import { TreeBuilder } from "../../memory/builder.ts";
 import type { DecisionRequest, Id, Message } from "../../core/types.ts";
 import { Binding, bindingKey } from "./binding.ts";
 import type { Inference, ModelRef } from "./inference.ts";
@@ -71,7 +72,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		this.opts = o;
 		this.core = o.core;
 		this.storage = o.storage;
-		this.memory = o.memory ?? new OptChat(o.core.db);
+		this.memory = o.memory ?? new OptChat(openMemoryDb(":memory:")); // a derivative: without a file it is simply rebuilt from the transcripts
 		this.builder = new TreeBuilder(this.memory);
 		this.builder.log = (m) => console.warn(`[memtree] ${m}`);
 	}
@@ -132,7 +133,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 
 	/** Re-attach to agent messages a dead process left half-written: their submissions are still in Pi. */
 	private async recover() {
-		for (const m of this.core.workingMessages()) {
+		for (const m of this.core.trusted.workingMessages()) {
 			const pi = m.meta.pi as { thread?: string; requestId?: string } | undefined;
 			if (!pi?.thread || !pi.requestId) continue; // not ours (e.g. another adapter)
 			const rec = await this.storage.submissionByRequest(Number(pi.thread) as any, pi.requestId, ctx);
@@ -157,8 +158,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		for (const rec of page.items) {
 			const m = /^msg:(\d+):(.+)$/.exec(rec.requestId ?? "");
 			if (!m) continue;
-			const row = this.core.db.prepare("SELECT id, realm_id FROM messages WHERE request_id = ?").get(`reply:${m[1]}:${m[2]}`) as { id: number; realm_id: string } | undefined;
-			const msg = row && this.core.getMessage(row.realm_id, row.id);
+			const msg = this.core.trusted.messageByRequest(`reply:${m[1]}:${m[2]}`);
 			if (msg) return { runId: `run:${msg.id}`, depth: Number(msg.meta.depth ?? 0), message: msg };
 		}
 		return undefined;
@@ -293,7 +293,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 
 	private async finalize(messageId: number, submissionId: SubmissionId) {
 		const { core } = this;
-		const cur = core.findMessage(messageId);
+		const cur = core.trusted.findMessage(messageId);
 		if (!cur || cur.status === "done") return;
 		const rec = await this.storage.submission(submissionId, ctx);
 		if (!rec) return;
@@ -319,7 +319,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		} else return;
 		// Inputs that were steered into a run in progress are answered by that run's single answer: say so once instead of repeating it.
 		const answerEntry = rec.status === "done" ? Number(rec.answer) : undefined;
-		const twin = answerEntry === undefined ? undefined : core.db.prepare("SELECT id FROM messages WHERE kind = 'agent' AND status = 'done' AND id != ? AND json_extract(meta, '$.pi.thread') = ? AND json_extract(meta, '$.pi.answerEntry') = ?").get(messageId, pi.thread, answerEntry);
+		const twin = answerEntry === undefined ? undefined : core.trusted.messagesWithMeta("pi.thread", pi.thread, { kind: "agent", status: "done" }).find((m) => m.id !== messageId && (m.meta.pi as any)?.answerEntry === answerEntry);
 		if (twin) { body = "↪ Answered together with the message above."; activity = []; }
 		const done = core.updateMessage(cur.realmId, messageId, cur.authorId, { text: body || "(no answer)", meta: { ...cur.meta, pi: { ...(cur.meta.pi as object), ...(answerEntry !== undefined ? { answerEntry } : {}) }, activity, ...(failures.length ? { failures } : {}) }, status: "done" });
 		for (const f of failures) console.warn(`[pi] failed generation attempt in ${pi.thread} (entry ${f.entry}, ${f.stopReason}): ${f.error || "no error message"}`);
@@ -373,8 +373,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 			const rec = await this.storage.submission(sid as any, ctx);
 			const m = /^msg:(\d+):(.+)$/.exec(rec?.requestId ?? "");
 			if (!m || !rec?.entry) continue;
-			const row = this.core.db.prepare("SELECT id, realm_id FROM messages WHERE request_id = ?").get(`reply:${m[1]}:${m[2]}`) as { id: number; realm_id: string } | undefined;
-			const msg = row && this.core.getMessage(row.realm_id, row.id);
+			const msg = this.core.trusted.messageByRequest(`reply:${m[1]}:${m[2]}`);
 			if (msg && msg.status === "working") return { current: msg, entryId: Number(rec.entry) };
 		}
 		return { current: undefined, entryId: undefined };
@@ -439,16 +438,15 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 					if (r === "aborted" || r === "already_placed") n++;
 				}
 			}
-			this.core.cancelOutboxFromRun(`run:${reply.id}`, "stopped");
-			for (const child of this.core.workingMessages().filter((m) => m.meta.parentRun === `run:${reply.id}`)) n += await stopReply(child);
+			this.core.trusted.cancelOutboxFromRun(`run:${reply.id}`, "stopped");
+			for (const child of this.core.trusted.workingMessages().filter((m) => m.meta.parentRun === `run:${reply.id}`)) n += await stopReply(child);
 			return n;
 		};
 		const conv = this.convs.get(bindingKey({ realm: o.realmId, space: o.spaceId, agent: o.agentId }));
 		let stopped = 0;
 		if (conv) {
 			// Working replies are stopped; finished ones may still have colleagues working on what they handed over.
-			const rows = this.core.db.prepare("SELECT realm_id, id FROM messages WHERE kind = 'agent' AND json_extract(meta, '$.pi.thread') = ? ORDER BY id DESC LIMIT 20").all(String(conv.id)) as { realm_id: string; id: number }[];
-			for (const row of rows) { const r = this.core.getMessage(row.realm_id, row.id); if (r) stopped += await stopReply(r); }
+			for (const r of this.core.trusted.messagesWithMeta("pi.thread", String(conv.id), { kind: "agent", limit: 20 })) stopped += await stopReply(r);
 			await conv.abort(ctx); // also withdraws anything still queued and aborts owned helper conversations
 		}
 		this.core.record(o.realmId, o.by, "agent.stopped", "actor", o.agentId, { spaceId: o.spaceId, stopped });

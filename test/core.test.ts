@@ -162,9 +162,9 @@ test("decisions expire when the clock passes their deadline", () => {
 	const { core, tick } = seededRealm();
 	core.createWork("payments", { id: "w1", kind: "tr", title: "t", state: "working" }, "agent:ops");
 	const { decision } = core.requestDecision("payments", { key: "k", workId: "w1", question: "Go?", expiresAt: 1_700_000_005_000 }, "agent:ops");
-	assert.equal(core.expireDecisions(), 0);
+	assert.equal(core.trusted.expireDecisions(), 0);
 	tick(10_000);
-	assert.equal(core.expireDecisions(), 1);
+	assert.equal(core.trusted.expireDecisions(), 1);
 	assert.equal(core.getDecision("payments", decision.id)?.status, "expired");
 	assert.equal(core.openAttention("payments").length, 0);
 });

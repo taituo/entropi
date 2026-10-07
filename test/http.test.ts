@@ -230,3 +230,26 @@ test("the same rules behind the UI: a private chat's decision is a 404 for other
 	for (let i = 0; i < 5; i++) { await call(alice, "GET", "/api/me"); await call(bob, "GET", "/api/realms/main/focus"); }
 	assert.equal(core.events("main").length, before, "no event per request");
 });
+
+test("capabilities: the API reports exactly what the connected runtime can do, and unsupported actions are refused plainly", async () => {
+	const caps = (await call(alice, "GET", "/api/realms/main")).body.capabilities;
+	assert.deepEqual(caps, { stop: true, compact: true, memtree: true, usage: true, sandboxes: true });
+	// another runtime that only knows how to stop and report usage
+	const partial: any = { stop: control.stop, usage: control.usage };
+	const core2 = new Core(openDb(":memory:"));
+	core2.createRealm({ id: "main", name: "Main", kind: "team" });
+	core2.createSpace("main", { id: "general", kind: "standing", name: "general" }, "system");
+	const app2 = createApp({ core: core2, config: cfg, control: () => partial });
+	await new Promise<void>((r) => app2.server.listen(0, r));
+	try {
+		const base2 = `http://127.0.0.1:${(app2.server.address() as AddressInfo).port}`;
+		const login2 = String((await fetch(`${base2}/auth/login?as=alice`, { redirect: "manual" })).headers.get("set-cookie")).split(";")[0];
+		const c2 = (m: string, p: string) => fetch(base2 + p, { method: m, headers: { cookie: login2, "x-requested-with": "entropi", "content-type": "application/json" }, body: m === "POST" ? "{}" : undefined }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+		assert.deepEqual((await c2("GET", "/api/realms/main")).body.capabilities, { stop: true, compact: false, memtree: false, usage: true, sandboxes: false });
+		core2.addActor("main", { id: "agent:x", kind: "agent", name: "X" }, "system");
+		core2.createSpace("main", { id: "room", kind: "case", name: "room", agentIds: ["agent:x"] }, "system");
+		assert.equal((await c2("POST", "/api/realms/main/spaces/room/agents/x/compact")).status, 501, "unsupported: refused, not faked");
+		assert.equal((await c2("GET", "/api/realms/main/spaces/room/agents/x/memtree")).body.unavailable, true);
+		assert.equal((await c2("POST", "/api/realms/main/spaces/room/agents/x/stop")).status, 200);
+	} finally { app2.close(); }
+});

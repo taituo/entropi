@@ -14,7 +14,7 @@ test("human message -> outbox -> Pi -> the agent's answer appears in the core, o
 	const [r] = replies(w.core);
 	assert.equal(r.authorId, "agent:ops");
 	assert.equal(r.text, "echo: @ops hello there");
-	assert.equal(w.core.pendingOutbox().length, 0, "the hand-over was confirmed");
+	assert.equal(w.core.trusted.pendingOutbox().length, 0, "the hand-over was confirmed");
 	assert.equal(w.core.db.prepare("SELECT status FROM outbox WHERE message_id = ?").get(m.id)!.status, "sent");
 	await w.close();
 });
@@ -112,7 +112,7 @@ test("stop: aborts the running answer, which says so; late model output changes 
 	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage() });
 	await w.start();
 	ask(w.core, "@ops HOLD this one");
-	await until(() => replies(w.core).length === 1 && w.core.workingMessages().length === 1 && w.faux.state.callCount >= 1);
+	await until(() => replies(w.core).length === 1 && w.core.trusted.workingMessages().length === 1 && w.faux.state.callCount >= 1);
 	const r = await w.runtime.stop({ ...ctlOf(), agentId: "agent:ops" });
 	assert.ok(r.stopped >= 1);
 	await until(() => replies(w.core)[0].status === "done");
@@ -176,7 +176,7 @@ test("steer: a person's message can join a run in progress instead of queueing b
 	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage() });
 	await w.start();
 	ask(w.core, "@ops HOLD the first one");
-	await until(() => w.core.workingMessages().length === 1 && w.faux.state.callCount >= 1);
+	await until(() => w.core.trusted.workingMessages().length === 1 && w.faux.state.callCount >= 1);
 	w.core.postMessage("main", "incidents", "human:anna", { text: "@ops also this", dispatchTo: ["agent:ops"], meta: { steer: true } });
 	w.core.postMessage("main", "incidents", "human:anna", { text: "@ops and this later", dispatchTo: ["agent:ops"] });
 	const { BACKGROUND_CONTEXT: ctx } = await import("@earendil-works/chord/context");

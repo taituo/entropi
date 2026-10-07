@@ -5,7 +5,7 @@ import { handleOf, hasRole } from "../core/core.ts";
 import { CoreError } from "../core/errors.ts";
 import type { ActivityEvent, Actor, Id, Message, Space } from "../core/types.ts";
 import type { Config } from "../config.ts";
-import type { AgentControl } from "../core/ports.ts";
+import { CAPABILITIES, type AgentControl } from "../core/ports.ts";
 import type { Hub } from "./sse.ts";
 import { MAX_IMAGE, MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_BYTES_PER_MESSAGE, type Uploads } from "./uploads.ts";
 import type { User } from "./auth.ts";
@@ -99,7 +99,10 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 	let r: RegExpExecArray | null;
 
 	if (m === "GET" && rest === "") {
+		const ctl = d.control?.();
 		return json(res, 200, {
+			// What this deployment can do beyond chatting: exactly what the connected runtime implements, so the UI shows no dead buttons.
+			capabilities: { ...Object.fromEntries(CAPABILITIES.map((c) => [c, typeof ctl?.[c] === "function"])), sandboxes: !!d.sandboxes?.() },
 			realm: core.getRealm(realmId), me,
 			actors: core.listActors(realmId).filter((a) => a.kind !== "system"),
 			presence: core.listActors(realmId).map((a) => core.getPresence(realmId, a.id)).filter(Boolean),
@@ -166,13 +169,13 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 		const agentId = space.agentIds.find((id) => handleOf(id) === r![2].toLowerCase());
 		if (!agentId) throw httpError(404, "no such agent in this space");
 		const ctl = d.control?.();
-		if (!ctl && m === "GET") return json(res, 200, { unavailable: true }); // reading is not an error when no model runtime is connected
-		if (!ctl) throw httpError(501, "no model runtime is connected (the scripted demo cannot do this)");
+		const ability = r[3] as "stop" | "compact" | "memtree";
 		const o = { realmId, spaceId: space.id, agentId, by: me.id };
-		if (m === "GET" && r[3] === "memtree") return json(res, 200, ctl.memtree(o));
-		if (m === "POST" && r[3] !== "memtree") {
+		if (m === "GET" && ability === "memtree") return json(res, 200, ctl?.memtree ? ctl.memtree(o) : { unavailable: true }); // reading is not an error when unsupported
+		if (m === "POST" && ability !== "memtree") {
+			if (!ctl?.[ability]) throw httpError(501, `this agent runtime cannot ${ability}`);
 			if (!hasRole(me, "operator")) throw httpError(403, "operators only");
-			return json(res, 200, r[3] === "stop" ? await ctl.stop(o) : await ctl.compact(o));
+			return json(res, 200, await ctl[ability]!(o));
 		}
 	}
 
@@ -196,7 +199,7 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 	if (m === "GET" && rest === "/usage") {
 		if (!hasRole(me, "approver")) throw httpError(403, "approvers only");
 		const ctl = d.control?.();
-		return json(res, 200, { usage: ctl ? await ctl.usage() : null });
+		return json(res, 200, { usage: ctl?.usage ? await ctl.usage() : null });
 	}
 
 	if (m === "POST" && rest === "/spaces") {

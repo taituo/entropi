@@ -1,4 +1,4 @@
-import type { Core } from "../core/core.ts";
+import type { Core, Trusted } from "../core/core.ts";
 import { handleOf } from "../core/core.ts";
 import type { AgentDispatcher } from "../core/ports.ts";
 import { failpoint } from "./failpoint.ts";
@@ -34,7 +34,7 @@ export class DispatchPump {
 	}
 
 	kick() {
-		for (const item of this.core.pendingOutbox()) {
+		for (const item of this.core.trusted.pendingOutbox()) {
 			if (this.inflight.has(item.id)) continue;
 			this.inflight.add(item.id);
 			void this.deliver(item).finally(() => {
@@ -44,15 +44,15 @@ export class DispatchPump {
 		}
 	}
 
-	private async deliver(item: ReturnType<Core["pendingOutbox"]>[number]) {
+	private async deliver(item: ReturnType<Trusted["pendingOutbox"]>[number]) {
 		try {
 			await this.runtime.dispatch({ realmId: item.realmId, spaceId: item.spaceId, agentId: item.agentId, text: item.text, from: item.from, messageId: item.messageId, depth: item.depth });
 			failpoint("pump:before-mark");
-			this.core.markOutbox(item.id, "sent");
+			this.core.trusted.markOutbox(item.id, "sent");
 		} catch (e) {
 			const msg = (e as Error).message;
-			if (this.core.bumpOutbox(item.id, msg) >= this.maxAttempts) {
-				this.core.markOutbox(item.id, "failed", msg);
+			if (this.core.trusted.bumpOutbox(item.id, msg) >= this.maxAttempts) {
+				this.core.trusted.markOutbox(item.id, "failed", msg);
 				this.core.postMessage(item.realmId, item.spaceId, "system", { kind: "notice", text: `Could not reach ${handleOf(item.agentId)}: ${msg}` });
 			} else setTimeout(() => this.kick(), 500).unref();
 		}

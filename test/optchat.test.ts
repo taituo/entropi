@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openDb } from "../src/core/db.ts";
-import { OptChat, TreeBuilder, VIEW_MARKER } from "../src/core/optchat.ts";
+import { OptChat, openMemoryDb, VIEW_MARKER } from "../src/memory/optchat.ts";
+import { TreeBuilder } from "../src/memory/builder.ts";
 import type { TranscriptEntry, TranscriptSource } from "../src/core/ports.ts";
 
 const setup = () => {
-	const mem = new OptChat(openDb(":memory:"));
+	const mem = new OptChat(openMemoryDb(":memory:"));
 	const builder = new TreeBuilder(mem);
 	builder.gapMs = 0;
 	return { mem, builder };

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { MemoryStorage } from "@earendil-works/pi-durable";
-import { VIEW_MARKER } from "../../src/core/optchat.ts";
+import { VIEW_MARKER } from "../../src/memory/optchat.ts";
 import { makeWorld, until } from "../pi-world.ts";
 
 const live = !!process.env.LOCAL_LLM_BASE_URL;

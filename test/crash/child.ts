@@ -24,7 +24,7 @@ if (action === "decide") {
 	let stableSince = 0, last = "";
 	while (Date.now() - t0 < Number(process.env.SETTLE_MS ?? 6000)) {
 		await new Promise((r) => setTimeout(r, 200));
-		const working = w.core.workingMessages().length, pending = w.core.pendingOutbox().length, open = w.core.openDecisions("main").length;
+		const working = w.core.trusted.workingMessages().length, pending = w.core.trusted.pendingOutbox().length, open = w.core.openDecisions("main").length;
 		const state = `${working}/${pending}/${open}`;
 		if (state !== last) { last = state; stableSince = Date.now(); }
 		const quiet = working === 0 && pending === 0;
