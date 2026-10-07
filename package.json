@@ -1,12 +1,42 @@
 {
   "name": "entropi",
   "version": "0.0.1",
-  "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "default": "./dist/core/index.js"
+    },
+    "./http": {
+      "types": "./dist/http/index.d.ts",
+      "default": "./dist/http/index.js"
+    },
+    "./batteries": {
+      "types": "./dist/batteries.d.ts",
+      "default": "./dist/batteries.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/server.*",
+    "!dist/demo",
+    "public",
+    "LICENSE",
+    "README.md"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
     "start": "node src/server.ts",
     "demo": "node src/server.ts",
     "typecheck": "tsc -p .",

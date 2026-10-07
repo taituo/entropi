@@ -7,3 +7,4 @@ dist/
 ._*
 .deploy.env
 ui-smoke-shots/
+.tmp-build/

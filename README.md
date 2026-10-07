@@ -34,6 +34,44 @@ AIRGAPPED=true LOCAL_LLM_BASE_URL=... LOCAL_LLM_MODEL=... npm run demo
 
 The core is free of opinions; "with batteries" is the one opinionated assembly that works right away (Pi Durable agents, Pi-env sandbox, OptChat memory, the UI, a local model, proxy auth). What it contains, how to swap parts out and what production still needs: [docs/with-batteries.md](docs/with-batteries.md).
 
+## Building on Entropi
+
+Another project depends on Entropi and writes its own server; `src/server.ts` is just the demo's version of it.
+
+```sh
+npm install github:taituo/entropi      # builds on install; needs Node >= 22.19
+```
+
+```ts
+import { createEntropi } from "entropi";
+import { buildInference, inferenceFromEnv, sandboxFromEnv } from "entropi/batteries";
+
+const entropi = await createEntropi({
+  dataDir: "./data",
+  realm: {                                          // agents and spaces are data, nothing is built in
+    id: "acme", name: "Acme",
+    agents: [{ id: "agent:helper", name: "Helper", spaces: ["lobby"], instructions: "You help the team." }],
+    spaces: [{ id: "lobby", topic: "Say hi" }],
+  },
+  config: { auth: { mode: "proxy", defaultRoles: ["operator"] } },
+  pi: { inference: buildInference(inferenceFromEnv(process.env)), extensions: (host) => [/* Pi tool sets, host.source("id") reaches a source */] },
+  sources: [myCluster],                             // your EntropiSource: observe / query / invoke(action, input, { idempotencyKey })
+  sandbox: sandboxFromEnv(process.env),             // or a SandboxManager of your own, or leave it out
+});
+await entropi.listen(8080);
+```
+
+Use `dispatcher` instead of `pi` to bring your own agent runtime. `test/create-entropi.test.ts` is a complete small example.
+
+**The surface promises** (semver; breaking changes only in major versions, and in 0.x only in minor ones):
+
+- `entropi` and `entropi/core`: `createEntropi`, the core operations and their types, the ports (`EntropiSource`, `AgentDispatcher`, `AgentControl`) and the event type list. `entropi/core` pulls in nothing else (no Pi, no sandbox, no HTTP).
+- `entropi/http`: `createApp` over a core.
+- HTTP under `/api/v1`, with the realm-scoped and actor-checked behaviour the tests pin down.
+- Event types are the names in `EVENT_TYPES`; new ones are minor, renaming or removing one is major. External effects through `invoke` carry an idempotency key, and a source must never run one key twice.
+
+**Not promised:** `entropi/batteries` (Pi runtime wrapper, sandbox, the demo fakes) follows its adapters and can change in a minor release, and Pi Durable itself is experimental. Database schema is migrated forward only. The UI in `public/` is the demo's, not API.
+
 ## Status
 
 Done: realms, actors and roles, spaces and messages, work, decisions with separation of duties, attention, event log; HTTP + SSE and a Preact UI (phone width too); Pi Durable runtime with crash-safe hand-over (tested with real SIGKILLs); steering and stopping agents; sandbox via Pi's execution environment; OptChat memory tree with an agent `memory_zoom` tool; a first external source (a fake cluster) with read tools and an approval-gated change tool; auth through a trusted proxy header or dev login.
@@ -50,6 +88,7 @@ src/memory/      OptChat: a rebuildable summary tree over a runtime's transcript
 src/adapters/    pi/ (Pi Durable runtime + agent tools), sandbox/ (podman, kube), fake-world/ (demo source), demo/ (scripted agents)
 src/runtime/     dispatch pump (transactional outbox), source bridge, crash failpoints
 src/http/        API, SSE, auth, uploads;  public/  the UI
+src/entropi.ts   createEntropi, the assembly point;  src/server.ts  the demo built on it;  src/demo/  the demo cast
 ```
 
 Adapters only talk to the core through its ports and never import each other; `test/boundaries.test.ts` checks this.

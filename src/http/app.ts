@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Core } from "../core/core.ts";
@@ -12,12 +13,12 @@ import { createUploads } from "./uploads.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = resolve(here, "..", "..", "public");
-const NODE_MODULES = resolve(here, "..", "..", "node_modules");
 const MIME: Record<string, string> = {
 	".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
 	".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".json": "application/json", ".ico": "image/x-icon",
 };
-const VENDOR: Record<string, string> = { "/vendor/preact.js": join(NODE_MODULES, "htm/preact/standalone.module.js") };
+// Found through Node's own resolution (htm's main file is dist/htm.js), so it works when Entropi is installed as a dependency: htm then sits next to it, not inside it.
+const VENDOR: Record<string, string> = { "/vendor/preact.js": join(dirname(dirname(createRequire(import.meta.url).resolve("htm"))), "preact/standalone.module.js") };
 
 async function serveStatic(res: import("node:http").ServerResponse, pathname: string) {
 	const file = VENDOR[pathname] ?? resolve(PUBLIC, `.${normalize(pathname === "/" ? "/index.html" : pathname)}`);
