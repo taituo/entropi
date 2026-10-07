@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { conflict, forbidden, invalid, notFound } from "./errors.ts";
+import type { CoreEventType } from "./events.ts";
 import type {
 	Actor, ActorKind, Attachment, AttentionItem, AttentionKind, DecisionRequest, ExternalRef, Focus, Id, Message, MessageKind, Presence, PresenceState,
 	OutboxItem, Realm, RealmKind, RealmPolicy, Space, SpaceKind, WorkItem, WorkState, ActivityEvent,
@@ -75,7 +76,11 @@ export class Core {
 		}
 	}
 
-	private emit(realmId: Id, type: string, actorId: Id, subjectKind: string, subjectId: Id, data: Record<string, unknown> = {}): ActivityEvent {
+	private emit(realmId: Id, type: CoreEventType, actorId: Id, subjectKind: string, subjectId: Id, data: Record<string, unknown> = {}): ActivityEvent {
+		return this.write(realmId, type, actorId, subjectKind, subjectId, data);
+	}
+
+	private write(realmId: Id, type: string, actorId: Id, subjectKind: string, subjectId: Id, data: Record<string, unknown> = {}): ActivityEvent {
 		const ts = this.now();
 		if (data.spaceId === undefined) {
 			const spaceId = this.spaceOfSubject(realmId, subjectKind, subjectId);
@@ -674,7 +679,7 @@ export class Core {
 	record(realmId: Id, by: Id, type: string, subjectKind: string, subjectId: Id, data: Record<string, unknown> = {}): ActivityEvent {
 		return this.tx(() => {
 			this.requireAct(realmId, by);
-			return this.emit(realmId, type, by, subjectKind, subjectId, data);
+			return this.write(realmId, type, by, subjectKind, subjectId, data);
 		});
 	}
 
