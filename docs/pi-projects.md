@@ -2,7 +2,6 @@
 
 Tutkittu verkosta 7.10.2026. Lähteinä projektien omat README:t ja pakettitiedot. Tämä on tutustumiskatsaus ja oma arvio soveltuvuudesta. Projekteja ei asennettu tai ajettu, eikä niiden lupauksia varmennettu käytössä. GitHubin kehityshaara voi erota julkaistusta paketista.
 
-Entropin [tuotekartta](product-map.md) järjestää omat ideat ergonomiaan, työhön ja teknologiaan. Tässä käytetään samaa järjestystä. Entropin nykyinen `package.json` pinnaa Chordin, pi-ai:n ja pi-durablen versioon `1.0.4`; alla kuvatut verkkolähteet koskevat tutkimishetken projektia.
 
 ## Mistä Pi-perheessä on kyse
 
@@ -126,4 +125,3 @@ Minusta Entropin oma kokonaisuus näkyy siinä, miten sama pitkäikäinen työ y
 
 - [Earendil Works](https://github.com/earendil-works): virallisten projektien hakemisto.
 - [pi-demo](https://github.com/earendil-works/pi-demo): ruudun ja kamerakuvan tallennus, automaattinen zoom ja demovienti Pi:n sisältä. Tuotteen esittelyn työkalu.
-- [Paikallinen tuotekartta](product-map.md): käyttäjän tavoitteet, CrewPi-kokemukset, featurelista ja Entropin coren arvio.

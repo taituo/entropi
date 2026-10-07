@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node src/server.ts",
+    "demo": "node src/server.ts",
     "typecheck": "tsc -p .",
     "test": "node --test test/*.test.ts",
     "test:live": "node --test --test-concurrency=1 test/live/*.live.ts"
@@ -23,5 +24,20 @@
     "@types/node": "^22.20.5",
     "typescript": "^5.9.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "description": "A strict, headless core for human + agent work: realms, actors, spaces, work, decisions, attention and an append-only event log, with HTTP+SSE, a web UI and a Pi Durable agent runtime.",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/taituo/entropi.git"
+  },
+  "homepage": "https://github.com/taituo/entropi",
+  "author": "taituo",
+  "keywords": [
+    "agents",
+    "human-in-the-loop",
+    "headless",
+    "sqlite",
+    "pi-durable",
+    "airgapped"
+  ]
 }

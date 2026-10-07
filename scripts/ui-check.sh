@@ -2,7 +2,6 @@
 # Fresh server (scripted demo agents, dev login) + the browser check in the Playwright container. Screenshots go to docs/img.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export PATH=/opt/opencode-go-node/bin:$PATH
 PORT=${PORT:-8097}
 DATA=$(mktemp -d)
 DATA_DIR=$DATA AUTH_MODE=dev PORT=$PORT PUBLIC_URL=http://localhost:$PORT node src/server.ts >"$DATA/server.log" 2>&1 &
