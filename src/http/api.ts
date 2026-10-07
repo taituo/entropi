@@ -17,6 +17,13 @@ export const statusOf = (e: any): number => e.status ?? (e instanceof CoreError 
 export const json = (res: ServerResponse, code: number, body: unknown) =>
 	res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify(body));
 
+/** An optional string field: absent is fine, any other type is a mistake worth a 400 rather than a guess. */
+export function optString(v: unknown, name: string): string {
+	if (v === undefined || v === null) return "";
+	if (typeof v !== "string") throw httpError(400, `${name} must be a string`);
+	return v;
+}
+
 export async function readBody(req: IncomingMessage, max = 64_000): Promise<any> {
 	const chunks: Buffer[] = [];
 	let size = 0;
@@ -25,11 +32,14 @@ export async function readBody(req: IncomingMessage, max = 64_000): Promise<any>
 		if (size > max) throw httpError(413, "body too large");
 		chunks.push(c);
 	}
+	let body: unknown;
 	try {
-		return chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
+		body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
 	} catch {
 		throw httpError(400, "invalid JSON");
 	}
+	if (typeof body !== "object" || body === null || Array.isArray(body)) throw httpError(400, "the body must be a JSON object");
+	return body;
 }
 
 async function readRaw(req: IncomingMessage, max: number): Promise<Buffer> {
@@ -49,6 +59,9 @@ export const humanId = (sub: string): Id => `human:${sub}`;
 
 /** First sign-in joins the default realm; later sign-ins refresh the name and roles the identity provider vouches for. */
 export function ensureMember(core: Core, realmId: Id, user: User): Actor {
+	// Identity comes from a header or cookie: bound what becomes a stored id or a name shown to everyone.
+	if (!/^[^\u0000-\u001f\u007f]{1,200}$/u.test(user.sub)) throw httpError(400, "the user id from the identity provider is empty, too long or has control characters");
+	user = { ...user, name: (user.name || user.sub).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 120) };
 	const roles = user.roles.filter((r) => ["viewer", "operator", "approver", "admin"].includes(r));
 	return core.syncIdentity(realmId, { id: humanId(user.sub), name: user.name, roles: roles.length ? roles : ["viewer"] });
 }
@@ -151,7 +164,7 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 		const atts = ids.map((id) => core.getAttachment(realmId, spaceId, id, me.id, me.id)); // only your own uploads
 		if (atts.some((a) => !a)) throw httpError(400, "unknown attachment");
 		if (atts.reduce((n, a) => n + a!.size, 0) > MAX_IMAGE_BYTES_PER_MESSAGE) throw httpError(413, "images in one message are limited to 10 MB in total");
-		const text = String(body.text ?? "").trim() || (atts.length ? "(image)" : "");
+		const text = optString(body.text, "text").trim() || (atts.length ? "(image)" : "");
 		if (!text || text.length > 4000) throw httpError(400, "message must be 1-4000 characters");
 		const space = core.getSpace(realmId, spaceId);
 		if (!space || !core.canSee(realmId, me.id, spaceId)) throw httpError(404, "no such space");
@@ -205,7 +218,7 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 
 	if (m === "POST" && rest === "/spaces") {
 		const body = await readBody(req);
-		const topic = String(body.topic ?? "").trim();
+		const topic = optString(body.topic, "topic").trim();
 		if (!topic) throw httpError(400, "give a topic");
 		if (!hasRole(me, "operator")) throw httpError(403, "operators only");
 		const agents = core.listActors(realmId).filter((a) => a.kind === "agent").map((a) => a.id);
@@ -216,7 +229,7 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 
 	if (m === "POST" && rest === "/dms") {
 		const body = await readBody(req);
-		const agent = core.listActors(realmId).find((a) => a.kind === "agent" && handleOf(a.id) === String(body.agent ?? "").toLowerCase());
+		const agent = core.listActors(realmId).find((a) => a.kind === "agent" && handleOf(a.id) === optString(body.agent, "agent").toLowerCase());
 		if (!agent) throw httpError(400, "no such agent");
 		if (!hasRole(me, "operator")) throw httpError(403, "operators only");
 		const { space, created } = core.createSpace(realmId, { id: `dm-${handleOf(agent.id)}-${createHash("sha256").update(me.id).digest("hex").slice(0, 16)}`, kind: "dm", name: agent.name, topic: `Private chat with ${agent.name}`, ownerId: me.id, agentIds: [agent.id] }, me.id);
@@ -242,8 +255,8 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 		const dec = core.getDecision(realmId, r[1]);
 		const spaceId = dec && core.getWork(realmId, dec.workId)?.spaceId;
 		if (!dec || (spaceId && !core.canSee(realmId, me.id, spaceId))) throw httpError(404, "decision not found");
-		const note = body.note ? String(body.note).slice(0, 300) : undefined;
-		return json(res, 200, { decision: core.decide(realmId, dec.id, me.id, String(body.answer ?? ""), note) });
+		const note = optString(body.note, "note").slice(0, 300) || undefined;
+		return json(res, 200, { decision: core.decide(realmId, dec.id, me.id, optString(body.answer, "answer"), note) });
 	}
 
 	if (m === "GET" && rest === "/events/log") {
