@@ -12,6 +12,7 @@
     "typecheck": "tsc -p .",
     "test": "node --test test/*.test.ts test/suites/*.test.ts",
     "test:live": "node --test --test-concurrency=1 test/live/*.live.ts",
+    "test:soak": "node --test --test-concurrency=1 test/soak/*.soak.ts",
     "test:cluster": "scripts/test-cluster.sh",
     "test:ui": "scripts/ui-smoke.sh"
   },
