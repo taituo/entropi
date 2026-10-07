@@ -32,7 +32,7 @@ export class ScriptedAgents implements AgentDispatcher {
 		const agent = core.getActor(o.realmId, o.agentId)!;
 		const msg = core.postMessage(o.realmId, o.spaceId, o.agentId, { text: "", status: "working", meta: { activity: [] as Step[] }, requestId: `reply:${o.messageId}:${o.agentId}` });
 		if (!msg.created) return; // a replayed dispatch must not answer twice
-		core.setPresence(o.realmId, o.agentId, "working");
+		core.setPresence(o.realmId, o.agentId, "working", o.agentId);
 		const activity: Step[] = [];
 		const push = (text: string) => this.live(core.updateMessage(o.realmId, msg.message.id, o.agentId, { text, meta: { activity } }));
 		const step = async (name: string, args: string, preview: string) => {
@@ -65,14 +65,14 @@ export class ScriptedAgents implements AgentDispatcher {
 				});
 			}
 		} finally {
-			core.setPresence(o.realmId, o.agentId, this.waiting.size ? "waiting" : "idle");
+			core.setPresence(o.realmId, o.agentId, this.waiting.size ? "waiting" : "idle", o.agentId);
 		}
 	}
 
 	private async followUp(w: { realmId: Id; spaceId: Id; agentId: Id; target: string }, answer: string, realmId: Id, workId: Id) {
 		this.waiting.delete(workId);
 		const { core } = this;
-		core.setPresence(realmId, w.agentId, "working");
+		core.setPresence(realmId, w.agentId, "working", w.agentId);
 		await sleep(this.stepMs);
 		if (answer === "approve") {
 			core.postMessage(realmId, w.spaceId, w.agentId, { text: `Approved. Applied \`POOL_SIZE=4\` and restarted \`${w.target}\`: 2/2 pods are Running. I will keep watching for a few minutes.`, requestId: `followup:${workId}` });
@@ -81,6 +81,6 @@ export class ScriptedAgents implements AgentDispatcher {
 			core.postMessage(realmId, w.spaceId, w.agentId, { text: "Understood, I will not change anything. The service stays down until someone decides how to proceed.", requestId: `followup:${workId}` });
 			core.setWorkState(realmId, workId, "blocked", w.agentId, { reason: "fix rejected" });
 		}
-		core.setPresence(realmId, w.agentId, "idle");
+		core.setPresence(realmId, w.agentId, "idle", w.agentId);
 	}
 }

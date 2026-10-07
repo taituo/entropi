@@ -7,6 +7,7 @@ import { openDb } from "../src/core/db.ts";
 import { OptChat } from "../src/core/optchat.ts";
 
 const ts = 1_700_000_000_000;
+const tsOf = (i: number) => ts + i * 60_000;
 const user = (text: string) => ({ model: [{ role: "user", content: text, timestamp: ts }] }) as any;
 const assistant = (text: string) =>
 	({ model: [{ role: "assistant", content: [{ type: "text", text }, { type: "toolCall", id: "c", name: "k8s_logs", arguments: { pod: "checkout" } }], timestamp: ts }] }) as any;
@@ -27,7 +28,7 @@ async function history(n: number) {
 }
 
 test("leafOf maps Pi entries to memory text and ignores non-conversation entries", () => {
-	assert.deepEqual(leafOf({ kind: "pi.user", model: user("hi").model }), { role: "user", raw: "hi" });
+	assert.deepEqual(leafOf({ kind: "pi.user", model: user("hi").model }), { role: "user", raw: "hi", ts }, "the message's own time travels with it");
 	assert.match(leafOf({ kind: "pi.assistant", model: assistant("done").model })!.raw, /^done\s+\[called k8s_logs\(\{"pod":"checkout"\}\)\]$/);
 	assert.match(leafOf({ kind: "pi.tool-result", model: toolResult("ok").model })!.raw, /^k8s_logs: ok$/);
 	assert.equal(leafOf({ kind: "pi.system", model: undefined }), undefined);
@@ -76,4 +77,18 @@ test("project(): a generation interrupted by a crash (an aborted partial) is not
 		e(3, "pi.assistant", { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Connection pools reuse connections." }] }),
 	]);
 	assert.equal(out.text, "Connection pools reuse connections.");
+});
+
+test("rebuilt memory keeps each message's real time, not the time of the rebuild", async () => {
+	const storage = new MemoryStorage();
+	const session = createSession(storage);
+	const conv = await session.commit(async (tx) => tx.createConversation({ ownership: { kind: "ownerless" } }), ctx);
+	await session.commit(async (tx) => {
+		await tx.appendEntry(UserEntry, conv.id, { model: [{ role: "user", content: "old question", timestamp: tsOf(0) }] } as any);
+		await tx.appendEntry(AssistantEntry, conv.id, { model: [{ role: "assistant", content: [{ type: "text", text: "old answer" }], timestamp: tsOf(1) }] } as any);
+	}, ctx);
+	const mem = new OptChat(openDb(":memory:"));
+	await mem.sync(String(conv.id), new PiTranscript(storage, ctx));
+	assert.deepEqual((mem.db.prepare("SELECT ts FROM memleaves WHERE thread = ? ORDER BY idx").all(String(conv.id)) as any[]).map((r) => r.ts), [tsOf(0), tsOf(1)]);
+	assert.match(mem.zoom(String(conv.id), "#0.0"), /at 2023-11-14/, "the date shown is the original one");
 });

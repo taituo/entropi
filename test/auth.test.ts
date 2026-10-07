@@ -49,3 +49,14 @@ test("proxy mode: login is a no-op redirect, logout goes where configured", asyn
 	assert.equal((await fetch(`${base}/auth/login`, { redirect: "manual" })).headers.get("location"), "/");
 	assert.equal((await fetch(`${base}/auth/logout`, { redirect: "manual" })).headers.get("location"), "/oauth2/sign_out");
 });
+
+test("two people whose ids start the same get different private chats, and neither can see the other's", async () => {
+	const { base, core } = await boot({ mode: "proxy", defaultRoles: ["operator"] });
+	core.addActor("main", { id: "agent:ops", kind: "agent", name: "Ops" }, "system");
+	const call = (user: string, path: string, body?: object) => fetch(`${base}/api/realms/main${path}`, { method: body ? "POST" : "GET", headers: { "x-forwarded-user": user, "x-requested-with": "entropi", "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+	const a = (await call("anna@example.com", "/dms", { agent: "ops" })).body.space.id;
+	const b = (await call("anna@example.org", "/dms", { agent: "ops" })).body.space.id;
+	assert.notEqual(a, b, "the chat id comes from a hash of the whole identity, not its first characters");
+	assert.equal((await call("anna@example.org", `/spaces/${a}/messages`)).status, 404);
+	assert.equal((await call("anna@example.com", `/spaces/${b}/messages`)).status, 404);
+});

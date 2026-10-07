@@ -9,11 +9,13 @@ import type {
 export const SYSTEM: Id = "system";
 const WORK_STATES: WorkState[] = ["queued", "working", "waiting", "blocked", "failed", "done", "cancelled"];
 const TERMINAL: WorkState[] = ["done", "cancelled"];
-const DEFAULT_POLICY: RealmPolicy = { separationOfDuties: true, autonomy: "low", maxDelegationDepth: 3, delegationsPer10Min: 8, maxDelegationsPerRun: 2 };
+const DEFAULT_POLICY: RealmPolicy = { separationOfDuties: true, maxDelegationDepth: 3, delegationsPer10Min: 8, maxDelegationsPerRun: 2 };
 /** Built-in roles are a ladder (an approver is also an operator); any other role must match exactly. */
 const RANK: Record<string, number> = { viewer: 0, operator: 1, approver: 2, admin: 3 };
+const URGENCIES = ["low", "normal", "high"];
+const SPACE_KINDS = ["standing", "case", "dm"];
 export const hasRole = (a: Pick<Actor, "roles">, role: string): boolean =>
-	role in RANK ? a.roles.some((r) => (RANK[r] ?? -1) >= RANK[role]) : a.roles.includes(role) || a.roles.includes("admin");
+	Object.hasOwn(RANK, role) ? a.roles.some((r) => Object.hasOwn(RANK, r) && RANK[r] >= RANK[role]) : a.roles.includes(role) || a.roles.includes("admin");
 
 type Row = Record<string, any>;
 export type Listener = (e: ActivityEvent) => void;
@@ -132,24 +134,46 @@ export class Core {
 		return (this.db.prepare("SELECT id FROM realms ORDER BY created_at, id").all() as Row[]).map((r) => this.getRealm(r.id)!);
 	}
 
-	/** Add (or update the roles/name of) a member. Identity (id, kind) never changes once set. */
-	addActor(realmId: Id, o: { id: Id; kind: ActorKind; name: string; roles?: string[]; profile?: Record<string, unknown> }, by: Id = SYSTEM): Actor {
+	/**
+	 * Add a member or change one (name, roles, profile). Membership and roles are authority, so only the system (bootstrap,
+	 * seeding) or an admin may do it: a person cannot promote themselves by calling the core. Identity and kind never change.
+	 * Nothing is written or announced when nothing changes.
+	 */
+	addActor(realmId: Id, o: { id: Id; kind: ActorKind; name: string; roles?: string[]; profile?: Record<string, unknown> }, by: Id): Actor {
 		return this.tx(() => {
 			this.realm(realmId);
 			if (o.id === SYSTEM) throw forbidden("the system actor is reserved");
-			if (by !== SYSTEM) this.actor(realmId, by);
-			const cur = this.getActor(realmId, o.id);
-			if (cur && cur.kind !== o.kind) throw conflict(`actor ${o.id} is a ${cur.kind}; identity cannot change kind`);
-			const roles = [...new Set(o.roles ?? cur?.roles ?? [])].sort();
-			const profile = o.profile ?? cur?.profile ?? {};
-			if (cur) this.db.prepare("UPDATE actors SET name = ?, roles = ?, profile = ? WHERE realm_id = ? AND id = ?").run(o.name, JSON.stringify(roles), JSON.stringify(profile), realmId, o.id);
-			else {
-				this.db.prepare("INSERT INTO actors (realm_id, id, kind, name, roles, profile, created_at) VALUES (?,?,?,?,?,?,?)").run(realmId, o.id, o.kind, o.name, JSON.stringify(roles), JSON.stringify(profile), this.now());
-				this.db.prepare("INSERT INTO presence (realm_id, actor_id, state, echo, updated_at) VALUES (?,?,?,0,?)").run(realmId, o.id, o.kind === "human" ? "active" : "idle", this.now());
-			}
-			this.emit(realmId, cur ? "actor.updated" : "actor.joined", by, "actor", o.id, { kind: o.kind, name: o.name, roles });
-			return this.getActor(realmId, o.id)!;
+			if (by !== SYSTEM && !hasRole(this.actor(realmId, by), "admin")) throw forbidden("only an admin can add members or change roles");
+			return this.upsertActor(realmId, o, by);
 		});
+	}
+
+	/**
+	 * The trusted path for people: the transport layer that authenticated someone (login, a trusted proxy header) records who
+	 * they are and which roles their identity provider gives them. Humans only, and only what the provider vouches for; it
+	 * is not a way to change an agent or to grant anything the provider did not. Never expose it to agents or to user input.
+	 */
+	syncIdentity(realmId: Id, o: { id: Id; name: string; roles: string[] }): Actor {
+		return this.tx(() => {
+			this.realm(realmId);
+			if (o.id === SYSTEM || this.getActor(realmId, o.id)?.kind === "agent") throw forbidden(`${o.id} is not a person`);
+			return this.upsertActor(realmId, { ...o, kind: "human" }, SYSTEM);
+		});
+	}
+
+	private upsertActor(realmId: Id, o: { id: Id; kind: ActorKind; name: string; roles?: string[]; profile?: Record<string, unknown> }, by: Id): Actor {
+		const cur = this.getActor(realmId, o.id);
+		if (cur && cur.kind !== o.kind) throw conflict(`actor ${o.id} is a ${cur.kind}; identity cannot change kind`);
+		const roles = [...new Set(o.roles ?? cur?.roles ?? [])].sort();
+		const profile = o.profile ?? cur?.profile ?? {};
+		if (cur && cur.name === o.name && JSON.stringify(cur.roles) === JSON.stringify(roles) && JSON.stringify(cur.profile) === JSON.stringify(profile)) return cur;
+		if (cur) this.db.prepare("UPDATE actors SET name = ?, roles = ?, profile = ? WHERE realm_id = ? AND id = ?").run(o.name, JSON.stringify(roles), JSON.stringify(profile), realmId, o.id);
+		else {
+			this.db.prepare("INSERT INTO actors (realm_id, id, kind, name, roles, profile, created_at) VALUES (?,?,?,?,?,?,?)").run(realmId, o.id, o.kind, o.name, JSON.stringify(roles), JSON.stringify(profile), this.now());
+			this.db.prepare("INSERT INTO presence (realm_id, actor_id, state, echo, updated_at) VALUES (?,?,?,0,?)").run(realmId, o.id, o.kind === "human" ? "active" : "idle", this.now());
+		}
+		this.emit(realmId, cur ? "actor.updated" : "actor.joined", by, "actor", o.id, { kind: o.kind, name: o.name, roles });
+		return this.getActor(realmId, o.id)!;
 	}
 
 	getActor(realmId: Id, id: Id): Actor | undefined {
@@ -164,13 +188,28 @@ export class Core {
 		return a;
 	}
 
+	/** Changing work needs an agent, the system, or a person who can operate; viewers watch. */
+	private requireAct(realmId: Id, by: Id): Actor {
+		const a = this.actor(realmId, by);
+		if (a.kind === "human" && !hasRole(a, "operator")) throw forbidden("viewers cannot change work");
+		return a;
+	}
+
+	/** Work in a space the actor cannot see does not exist for them (404, not 403: no hint that it is there). */
+	private seeWork(realmId: Id, by: Id, workId: Id): WorkItem {
+		const w = this.getWork(realmId, workId);
+		if (!w || (w.spaceId && !this.canSee(realmId, by, w.spaceId))) throw notFound(`work ${workId} in realm ${realmId}`);
+		return w;
+	}
+
 	listActors(realmId: Id): Actor[] {
 		return (this.db.prepare("SELECT id FROM actors WHERE realm_id = ? ORDER BY id").all(realmId) as Row[]).map((r) => this.getActor(realmId, r.id)!);
 	}
 
-	setPresence(realmId: Id, actorId: Id, state: PresenceState, o: { echo?: boolean } = {}): Presence {
+	setPresence(realmId: Id, actorId: Id, state: PresenceState, by: Id, o: { echo?: boolean } = {}): Presence {
 		return this.tx(() => {
 			const a = this.actor(realmId, actorId);
+			if (by !== actorId && by !== SYSTEM && !hasRole(this.actor(realmId, by), "admin")) throw forbidden("only you (or an admin) can change your presence");
 			if (a.kind === "system") throw forbidden("the system actor has no presence");
 			const humanStates: PresenceState[] = ["active", "away", "silent", "offline"];
 			const agentStates: PresenceState[] = ["idle", "working", "waiting", "error", "offline"];
@@ -192,14 +231,14 @@ export class Core {
 	createWork(realmId: Id, o: { id?: Id; kind: string; title: string; goal?: string; ownerId?: Id | null; parentId?: Id | null; spaceId?: Id | null; state?: WorkState }, by: Id): WorkItem {
 		return this.tx(() => {
 			this.realm(realmId);
-			this.actor(realmId, by);
+			this.requireAct(realmId, by);
 			const id = o.id ?? `w_${randomUUID().slice(0, 8)}`;
 			const have = this.getWork(realmId, id);
-			if (have) return have; // idempotent
+			if (have) return this.seeWork(realmId, by, id); // idempotent
 			if (!o.title.trim()) throw invalid("work needs a title");
 			if (o.ownerId) this.actor(realmId, o.ownerId);
 			if (o.parentId && !this.getWork(realmId, o.parentId)) throw notFound(`parent work ${o.parentId}`);
-			if (o.spaceId && !this.getSpace(realmId, o.spaceId)) throw notFound(`space ${o.spaceId}`);
+			if (o.spaceId && !this.canSee(realmId, by, o.spaceId)) throw notFound(`space ${o.spaceId}`);
 			const state = o.state ?? "queued";
 			if (!WORK_STATES.includes(state)) throw invalid(`unknown work state ${state}`);
 			const now = this.now();
@@ -228,8 +267,15 @@ export class Core {
 
 	setWorkState(realmId: Id, workId: Id, state: WorkState, by: Id, o: { phase?: string | null; reason?: string } = {}): WorkItem {
 		return this.tx(() => {
-			this.actor(realmId, by);
-			const w = this.work(realmId, workId);
+			this.requireAct(realmId, by);
+			return this.applyWorkState(realmId, this.seeWork(realmId, by, workId), state, by, o);
+		});
+	}
+
+	/** The state change itself, after the caller's rights were checked (also used by the automatic decision <-> work coupling). */
+	private applyWorkState(realmId: Id, w: WorkItem, state: WorkState, by: Id, o: { phase?: string | null; reason?: string }): WorkItem {
+		const workId = w.id;
+		{
 			if (!WORK_STATES.includes(state)) throw invalid(`unknown work state ${state}`);
 			if (TERMINAL.includes(w.state) && state !== w.state) throw conflict(`work ${workId} is ${w.state}; terminal states are final`);
 			const phase = o.phase === undefined ? w.phase : o.phase;
@@ -243,15 +289,15 @@ export class Core {
 			else this.resolve(realmId, "blocked", workId);
 			if (TERMINAL.includes(state)) this.cancelOpenDecisions(realmId, workId, by, `work ${state}`);
 			return this.getWork(realmId, workId)!;
-		});
+		}
 	}
 
 	// ------------------------------------------------------------------ external references
 
 	linkRef(realmId: Id, workId: Id, o: { source: string; externalId: string; label?: string; url?: string; state?: string }, by: Id): ExternalRef {
 		return this.tx(() => {
-			this.actor(realmId, by);
-			this.work(realmId, workId);
+			this.requireAct(realmId, by);
+			this.seeWork(realmId, by, workId);
 			const cur = this.getRef(realmId, o.source, o.externalId);
 			if (cur && cur.workId !== workId) throw conflict(`${o.source}:${o.externalId} is already linked to work ${cur.workId}`);
 			if (!cur) {
@@ -275,9 +321,10 @@ export class Core {
 	/** A source reports the state of something it owns. Cached here; only a change produces an event. */
 	observeRef(realmId: Id, source: string, externalId: string, state: string, by: Id): ExternalRef {
 		return this.tx(() => {
-			this.actor(realmId, by);
+			this.requireAct(realmId, by);
 			const cur = this.getRef(realmId, source, externalId);
 			if (!cur) throw notFound(`ref ${source}:${externalId}`);
+			this.seeWork(realmId, by, cur.workId);
 			if (cur.state === state) return cur;
 			this.db.prepare("UPDATE external_refs SET state = ?, observed_at = ? WHERE realm_id = ? AND source = ? AND external_id = ?").run(state, this.now(), realmId, source, externalId);
 			this.emit(realmId, "ref.observed", by, "work", cur.workId, { source, externalId, from: cur.state, to: state });
@@ -293,10 +340,11 @@ export class Core {
 		urgency?: DecisionRequest["urgency"]; requiredAuthority?: string; expiresAt?: number | null;
 	}, by: Id): { decision: DecisionRequest; created: boolean } {
 		return this.tx(() => {
-			this.actor(realmId, by);
+			this.requireAct(realmId, by);
 			const have = this.decisionByKey(realmId, o.key);
-			if (have) return { decision: have, created: false };
-			const w = this.work(realmId, o.workId);
+			if (have) { this.seeWork(realmId, by, have.workId); return { decision: have, created: false }; }
+			const w = this.seeWork(realmId, by, o.workId);
+			if (o.urgency !== undefined && !URGENCIES.includes(o.urgency)) throw invalid(`urgency must be one of: ${URGENCIES.join(", ")}`);
 			if (TERMINAL.includes(w.state)) throw conflict(`work ${w.id} is ${w.state}`);
 			const options = o.options ?? ["approve", "reject"];
 			if (options.length < 2 || new Set(options).size !== options.length) throw invalid("a decision needs at least two distinct options");
@@ -313,7 +361,7 @@ export class Core {
 				this.db.prepare("UPDATE decisions SET message_id = ? WHERE realm_id = ? AND id = ?").run(card.id, realmId, id);
 			}
 			this.raise(realmId, "decision", o.workId, id, o.question);
-			if (w.state !== "waiting") this.setWorkState(realmId, o.workId, "waiting", by, { reason: "decision requested" });
+			if (w.state !== "waiting") this.applyWorkState(realmId, w, "waiting", by, { reason: "decision requested" });
 			return { decision: this.getDecision(realmId, id)!, created: true };
 		});
 	}
@@ -341,22 +389,28 @@ export class Core {
 		return { ok: true };
 	}
 
-	/** First decision wins; a second one conflicts rather than silently overwriting. */
+	/**
+	 * First decision wins; a second one conflicts rather than silently overwriting. The checks run in this order so the answer
+	 * never leaks or misleads: does it exist for you (else 404), is it still open and not past its deadline (else 409, even for
+	 * someone who could not have decided it), may you decide it (else 403), is the answer one of the options (else 400).
+	 */
 	decide(realmId: Id, decisionId: Id, actorId: Id, answer: string, note?: string): DecisionRequest {
+		this.expireDecisions(); // a deadline that has passed counts now, not whenever a timer next runs
 		return this.tx(() => {
+			this.actor(realmId, actorId);
 			const d = this.getDecision(realmId, decisionId);
 			if (!d) throw notFound(`decision ${decisionId} in realm ${realmId}`);
+			const w = this.seeWork(realmId, actorId, d.workId);
+			if (d.status !== "open") throw conflict(`decision ${decisionId} is already ${d.status}${d.decidedBy ? ` (by ${d.decidedBy})` : ""}`);
 			const ok = this.canDecide(realmId, d, actorId);
 			if (!ok.ok) throw forbidden(ok.reason);
-			if (d.status !== "open") throw conflict(`decision ${decisionId} is already ${d.status}${d.decidedBy ? ` (by ${d.decidedBy})` : ""}`);
 			if (!d.options.includes(answer)) throw invalid(`answer must be one of: ${d.options.join(", ")}`);
 			this.db.prepare("UPDATE decisions SET status = 'decided', answer = ?, decided_by = ?, note = ?, decided_at = ? WHERE realm_id = ? AND id = ? AND status = 'open'")
 				.run(answer, actorId, note ?? null, this.now(), realmId, decisionId);
 			this.emit(realmId, "decision.decided", actorId, "decision", decisionId, { workId: d.workId, answer, note: note ?? null });
 			this.syncDecisionCard(realmId, decisionId);
 			this.resolve(realmId, "decision", decisionId);
-			const w = this.work(realmId, d.workId);
-			if (w.state === "waiting" && this.openDecisions(realmId, d.workId).length === 0) this.setWorkState(realmId, d.workId, "working", actorId, { reason: `decided: ${answer}` });
+			if (w.state === "waiting" && this.openDecisions(realmId, d.workId).length === 0) this.applyWorkState(realmId, w, "working", actorId, { reason: `decided: ${answer}` });
 			return this.getDecision(realmId, decisionId)!;
 		});
 	}
@@ -398,11 +452,21 @@ export class Core {
 	createSpace(realmId: Id, o: { id?: Id; kind: SpaceKind; name: string; topic?: string; ownerId?: Id | null; agentIds?: Id[] }, by: Id): { space: Space; created: boolean } {
 		return this.tx(() => {
 			this.realm(realmId);
-			this.actor(realmId, by);
+			const actor = this.actor(realmId, by);
+			if (!SPACE_KINDS.includes(o.kind)) throw invalid(`space kind must be one of: ${SPACE_KINDS.join(", ")}`);
 			const id = o.id ?? slug(o.name);
 			if (id.length < 2) throw invalid("space name must have at least 2 letters or digits");
+			const power = by === SYSTEM || hasRole(actor, "admin");
+			// Standing rooms are for admins; cases for anyone who can operate (agents too); a private chat only for its own owner.
+			if (!power && o.kind === "standing") throw forbidden("only an admin can create a standing room");
+			if (!power && o.kind === "case" && actor.kind === "human" && !hasRole(actor, "operator")) throw forbidden("viewers cannot open cases");
+			if (!power && o.kind === "dm" && o.ownerId !== by) throw forbidden("a private chat can only be created for yourself");
 			const have = this.getSpace(realmId, id);
-			if (have) return { space: have, created: false };
+			if (have) {
+				if (have.kind !== o.kind || have.ownerId !== (o.ownerId ?? null)) throw conflict(`space ${id} already exists with a different kind or owner`);
+				if (!this.canSee(realmId, by, id)) throw notFound(`space ${id}`);
+				return { space: have, created: false };
+			}
 			const agentIds = [...new Set(o.agentIds ?? [])];
 			for (const a of agentIds) if (this.actor(realmId, a).kind !== "agent") throw invalid(`${a} is not an agent`);
 			if (o.kind === "dm") {
@@ -594,7 +658,7 @@ export class Core {
 	/** Record something a person or system did that is not a state change by itself (stop, compact...). */
 	record(realmId: Id, by: Id, type: string, subjectKind: string, subjectId: Id, data: Record<string, unknown> = {}): ActivityEvent {
 		return this.tx(() => {
-			this.actor(realmId, by);
+			this.requireAct(realmId, by);
 			return this.emit(realmId, type, by, subjectKind, subjectId, data);
 		});
 	}

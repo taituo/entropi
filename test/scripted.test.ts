@@ -9,7 +9,7 @@ const until = async (fn: () => boolean, ms = 3000) => { const t = Date.now(); wh
 test("scripted loop: message -> agent work -> approval card -> verdict -> follow-up and work done", async () => {
 	const { core } = testCore();
 	seedRealm(core, "main");
-	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] });
+	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] }, "system");
 	const agents = new ScriptedAgents(core, { stepMs: 1 });
 	const live: string[] = [];
 	agents.live = (m) => live.push(m.text);
@@ -34,7 +34,7 @@ test("scripted loop: message -> agent work -> approval card -> verdict -> follow
 test("a rejected fix leaves the work blocked and raises attention", async () => {
 	const { core } = testCore();
 	seedRealm(core, "main");
-	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] });
+	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] }, "system");
 	const agents = new ScriptedAgents(core, { stepMs: 1 });
 	const ask = core.postMessage("main", "incidents", "human:anna", { text: "@ops fix checkout" }).message;
 	await agents.dispatch({ realmId: "main", spaceId: "incidents", agentId: "agent:ops", text: ask.text, from: "human:anna", messageId: ask.id });

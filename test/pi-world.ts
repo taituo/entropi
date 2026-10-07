@@ -77,7 +77,7 @@ export type World = Awaited<ReturnType<typeof makeWorld>>;
 export async function makeWorld(o: { sandboxDir?: string; dbPath: string; storage: Storage; real?: boolean; runtime?: Partial<ConstructorParameters<typeof PiRuntime>[0]> }) {
 	const core = new Core(openDb(o.dbPath));
 	seedRealm(core, "main");
-	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] });
+	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] }, "system");
 	const gate = makeGate();
 	const faux = scriptedModel(gate);
 	const inference = o.real

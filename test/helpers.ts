@@ -13,9 +13,9 @@ export function testCore() {
 export function seededRealm() {
 	const t = testCore();
 	t.core.createRealm({ id: "payments", name: "Payments", kind: "team" });
-	t.core.addActor("payments", { id: "agent:ops", kind: "agent", name: "Ops" });
-	t.core.addActor("payments", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] });
-	t.core.addActor("payments", { id: "human:mikko", kind: "human", name: "Mikko", roles: ["approver"] });
-	t.core.addActor("payments", { id: "human:olli", kind: "human", name: "Olli", roles: ["operator"] });
+	t.core.addActor("payments", { id: "agent:ops", kind: "agent", name: "Ops" }, "system");
+	t.core.addActor("payments", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] }, "system");
+	t.core.addActor("payments", { id: "human:mikko", kind: "human", name: "Mikko", roles: ["approver"] }, "system");
+	t.core.addActor("payments", { id: "human:olli", kind: "human", name: "Olli", roles: ["operator"] }, "system");
 	return t;
 }

@@ -8,8 +8,6 @@ export type RealmKind = "personal" | "team" | "product" | "org" | "incident" | "
 export type RealmPolicy = {
 	/** A decision cannot be decided by the actor that requested it. */
 	separationOfDuties: boolean;
-	/** How freely agents may act in this realm without a human decision. */
-	autonomy: "low" | "medium" | "high";
 	/** How many agent-to-agent hops one human message may cause. */
 	maxDelegationDepth: number;
 	/** Agent-initiated delegations allowed per space per 10 minutes. */

@@ -40,7 +40,7 @@ const SPACES = [
 /** A fresh realm with the demo cast. Idempotent: running it again changes nothing. */
 export function seedRealm(core: Core, realmId: string, name = "Demo Company") {
 	core.createRealm({ id: realmId, name, kind: "team" });
-	for (const a of AGENTS) core.addActor(realmId, { id: a.id, kind: "agent", name: a.name, profile: { title: a.title, color: a.color, can: a.can, cannot: a.cannot, extensions: a.extensions, instructions: `${COMMON}\n\n${a.role}` } });
+	for (const a of AGENTS) core.addActor(realmId, { id: a.id, kind: "agent", name: a.name, profile: { title: a.title, color: a.color, can: a.can, cannot: a.cannot, extensions: a.extensions, instructions: `${COMMON}\n\n${a.role}` } }, "system");
 	for (const s of SPACES) {
 		const agentIds = AGENTS.filter((a) => a.spaces.includes(s.id)).map((a) => a.id);
 		const { created } = core.createSpace(realmId, { id: s.id, kind: "standing", name: s.id, topic: s.topic, agentIds }, "system");

@@ -23,7 +23,7 @@ test("realm creation is idempotent and adds the system actor", () => {
 test("nothing crosses a realm boundary", () => {
 	const { core } = seededRealm();
 	core.createRealm({ id: "other", name: "Other", kind: "team" });
-	core.addActor("other", { id: "human:eve", kind: "human", name: "Eve", roles: ["approver"] });
+	core.addActor("other", { id: "human:eve", kind: "human", name: "Eve", roles: ["approver"] }, "system");
 	const w = core.createWork("payments", { id: "w1", kind: "incident", title: "Checkout down" }, "agent:ops");
 	assert.equal(core.getWork("other", w.id), undefined);
 	assert.equal(core.listWork("other").length, 0);
@@ -36,8 +36,8 @@ test("nothing crosses a realm boundary", () => {
 test("every mutation needs a member actor", () => {
 	const { core } = seededRealm();
 	assert.equal(code(() => core.createWork("payments", { kind: "x", title: "t" }, "human:ghost")), "forbidden");
-	assert.equal(code(() => core.addActor("payments", { id: "system", kind: "agent", name: "x" })), "forbidden");
-	assert.equal(code(() => core.addActor("payments", { id: "human:anna", kind: "agent", name: "Anna" })), "conflict");
+	assert.equal(code(() => core.addActor("payments", { id: "system", kind: "agent", name: "x" }, "system")), "forbidden");
+	assert.equal(code(() => core.addActor("payments", { id: "human:anna", kind: "agent", name: "Anna" }, "system")), "conflict");
 });
 
 test("events are append-only at the database level", () => {
@@ -104,7 +104,7 @@ test("decision request is idempotent per key and puts the work in waiting", () =
 
 test("deciding: authority, humans only, separation of duties, Echo, first decision wins", () => {
 	const { core } = seededRealm();
-	core.addActor("payments", { id: "human:req", kind: "human", name: "Requester", roles: ["approver"] });
+	core.addActor("payments", { id: "human:req", kind: "human", name: "Requester", roles: ["approver"] }, "system");
 	core.createWork("payments", { id: "w1", kind: "tr", title: "TR-1", state: "working" }, "agent:ops");
 	const { decision: d } = core.requestDecision("payments", { key: "k", workId: "w1", question: "Deploy?" }, "agent:ops");
 
@@ -112,9 +112,9 @@ test("deciding: authority, humans only, separation of duties, Echo, first decisi
 	assert.equal(code(() => core.decide("payments", d.id, "agent:ops", "approve")), "forbidden", "agents never decide");
 	assert.equal(code(() => core.decide("payments", d.id, "human:anna", "maybe")), "invalid");
 
-	core.setPresence("payments", "human:anna", "away", { echo: true });
+	core.setPresence("payments", "human:anna", "away", "human:anna", { echo: true });
 	assert.match(String((() => { try { core.decide("payments", d.id, "human:anna", "approve"); } catch (e) { return (e as Error).message; } })()), /Echo/);
-	core.setPresence("payments", "human:anna", "active");
+	core.setPresence("payments", "human:anna", "active", "human:anna");
 
 	const done = core.decide("payments", d.id, "human:anna", "approve", "looks fine");
 	assert.equal(done.status, "decided");
@@ -127,14 +127,14 @@ test("deciding: authority, humans only, separation of duties, Echo, first decisi
 
 test("separation of duties: a human requester cannot decide their own request (when the realm says so)", () => {
 	const { core } = seededRealm();
-	core.addActor("payments", { id: "human:req", kind: "human", name: "Requester", roles: ["approver"] });
+	core.addActor("payments", { id: "human:req", kind: "human", name: "Requester", roles: ["approver"] }, "system");
 	core.createWork("payments", { id: "w1", kind: "tr", title: "t", state: "working" }, "human:req");
 	const { decision } = core.requestDecision("payments", { key: "k", workId: "w1", question: "Go?" }, "human:req");
 	assert.equal(code(() => core.decide("payments", decision.id, "human:req", "approve")), "forbidden");
 	assert.equal(core.decide("payments", decision.id, "human:anna", "approve").status, "decided");
 
 	core.createRealm({ id: "solo", name: "Solo", kind: "personal", policy: { separationOfDuties: false } });
-	core.addActor("solo", { id: "human:me", kind: "human", name: "Me", roles: ["approver"] });
+	core.addActor("solo", { id: "human:me", kind: "human", name: "Me", roles: ["approver"] }, "system");
 	core.createWork("solo", { id: "w", kind: "x", title: "t", state: "working" }, "human:me");
 	const own = core.requestDecision("solo", { key: "k", workId: "w", question: "Go?" }, "human:me").decision;
 	assert.equal(core.decide("solo", own.id, "human:me", "approve").status, "decided");
@@ -198,6 +198,6 @@ test("focus is the small human view: needs-you first, only what this person may 
 	assert.equal(anna.background.count, 1, "w5 is queued and quiet: a count, not a card");
 	assert.equal(core.focus("payments", "human:olli").needsYou.length, 0, "an operator is not asked to approve");
 
-	core.setPresence("payments", "human:anna", "away", { echo: true });
+	core.setPresence("payments", "human:anna", "away", "human:anna", { echo: true });
 	assert.equal(core.focus("payments", "human:anna").needsYou.length, 2, "away humans still see what waits for them");
 });

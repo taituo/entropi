@@ -11,9 +11,9 @@ const code = (fn: () => unknown) => {
 function world() {
 	const t = seededRealm();
 	const { core } = t;
-	core.addActor("payments", { id: "agent:dev", kind: "agent", name: "Developer" });
-	core.addActor("payments", { id: "agent:rev", kind: "agent", name: "Reviewer" });
-	core.addActor("payments", { id: "human:vera", kind: "human", name: "Vera", roles: ["viewer"] });
+	core.addActor("payments", { id: "agent:dev", kind: "agent", name: "Developer" }, "system");
+	core.addActor("payments", { id: "agent:rev", kind: "agent", name: "Reviewer" }, "system");
+	core.addActor("payments", { id: "human:vera", kind: "human", name: "Vera", roles: ["viewer"] }, "system");
 	core.createSpace("payments", { id: "general", kind: "standing", name: "general", agentIds: ["agent:ops", "agent:dev", "agent:rev"] }, "system");
 	return t;
 }

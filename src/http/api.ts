@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Core } from "../core/core.ts";
 import { handleOf, hasRole } from "../core/core.ts";
@@ -49,7 +50,7 @@ export const humanId = (sub: string): Id => `human:${sub}`;
 /** First sign-in joins the default realm; later sign-ins refresh the name and roles the identity provider vouches for. */
 export function ensureMember(core: Core, realmId: Id, user: User): Actor {
 	const roles = user.roles.filter((r) => ["viewer", "operator", "approver", "admin"].includes(r));
-	return core.addActor(realmId, { id: humanId(user.sub), kind: "human", name: user.name, roles: roles.length ? roles : ["viewer"] });
+	return core.syncIdentity(realmId, { id: humanId(user.sub), name: user.name, roles: roles.length ? roles : ["viewer"] });
 }
 
 /** The wire shape of a space for the browser. */
@@ -214,7 +215,7 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 		const agent = core.listActors(realmId).find((a) => a.kind === "agent" && handleOf(a.id) === String(body.agent ?? "").toLowerCase());
 		if (!agent) throw httpError(400, "no such agent");
 		if (!hasRole(me, "operator")) throw httpError(403, "operators only");
-		const { space, created } = core.createSpace(realmId, { id: `dm-${handleOf(agent.id)}-${handleOf(me.id).slice(0, 12)}`, kind: "dm", name: agent.name, topic: `Private chat with ${agent.name}`, ownerId: me.id, agentIds: [agent.id] }, me.id);
+		const { space, created } = core.createSpace(realmId, { id: `dm-${handleOf(agent.id)}-${createHash("sha256").update(me.id).digest("hex").slice(0, 16)}`, kind: "dm", name: agent.name, topic: `Private chat with ${agent.name}`, ownerId: me.id, agentIds: [agent.id] }, me.id);
 		if (created) core.postMessage(realmId, space.id, "system", { kind: "notice", text: `Private chat with ${agent.name}. Only you can see it, and ${agent.name} answers every message (no @ needed). It cannot hand work to other agents.` });
 		return json(res, 200, { space: spaceView(space), created });
 	}

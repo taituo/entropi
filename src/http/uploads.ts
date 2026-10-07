@@ -31,7 +31,7 @@ export function createUploads(dir: string) {
 			await writeFile(join(dir, `${id}.${kind.ext}`), bytes);
 			return { id, mime: kind.mime, size: bytes.length };
 		},
-		read: (id: string, mime: string) => readFile(join(dir, `${id.replace(/[^a-f0-9]/g, "")}.${EXT[mime] ?? "bin"}`)),
+		read: (id: string, mime: string) => readFile(join(dir, `${id.replace(/[^a-f0-9]/g, "")}.${Object.hasOwn(EXT, mime) ? EXT[mime] : "bin"}`)),
 	};
 }
 export type Uploads = ReturnType<typeof createUploads>;

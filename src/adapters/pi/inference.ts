@@ -102,7 +102,7 @@ export function buildInference(cfg: InferenceConfig, extra: { id: string; provid
 	return {
 		models, providers,
 		resolve: (handle) => {
-			const ref = cfg.perAgent[handle] ?? fallback;
+			const ref = (Object.hasOwn(cfg.perAgent, handle) ? cfg.perAgent[handle] : undefined) ?? fallback;
 			return ref ? parseRef(ref) : undefined;
 		},
 		summarizer: () => { const r = cfg.summarizerModel ?? fallback; return r ? parseRef(r) : undefined; },

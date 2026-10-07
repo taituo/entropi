@@ -10,15 +10,16 @@ const blocks = (c: any): string =>
 	typeof c === "string" ? c : (c ?? []).map((b: any) => (b.type === "text" ? b.text : b.type === "image" ? "[image]" : "")).join(" ");
 
 /** A Pi transcript entry as memory text, or undefined for entries that are not conversation (system prompt, summaries, bookkeeping). */
-export function leafOf(entry: Pick<EntryRecord, "kind" | "model">): Pick<TranscriptEntry, "role" | "raw"> | undefined {
+export function leafOf(entry: Pick<EntryRecord, "kind" | "model">): (Pick<TranscriptEntry, "role" | "raw"> & { ts?: number }) | undefined {
 	const msg: any = entry.model?.[0];
 	if (!msg) return undefined;
-	if (entry.kind === "pi.user") return { role: "user", raw: blocks(msg.content) };
+	const ts = typeof msg.timestamp === "number" ? msg.timestamp : undefined; // when the message really happened, not when we rebuilt memory
+	if (entry.kind === "pi.user") return { role: "user", raw: blocks(msg.content), ts };
 	if (entry.kind === "pi.assistant") {
 		const calls = (msg.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => `[called ${b.name}(${short(b.arguments, 90)})]`);
-		return { role: "assistant", raw: [blocks(msg.content), ...calls].join(" ").trim() };
+		return { role: "assistant", raw: [blocks(msg.content), ...calls].join(" ").trim(), ts };
 	}
-	if (entry.kind === "pi.tool-result") return { role: "tool", raw: `${msg.toolName ?? "tool"}: ${blocks(msg.content)}` };
+	if (entry.kind === "pi.tool-result") return { role: "tool", raw: `${msg.toolName ?? "tool"}: ${blocks(msg.content)}`, ts };
 	return undefined;
 }
 
@@ -48,7 +49,7 @@ export class PiTranscript implements TranscriptSource {
 		found.sort((a, b) => Number(a.id) - Number(b.id));
 		for (const e of found) {
 			const leaf = leafOf(e);
-			if (leaf) yield { entryId: Number(e.id), ...leaf, ts: Date.now() };
+			if (leaf) yield { entryId: Number(e.id), role: leaf.role, raw: leaf.raw, ts: leaf.ts ?? Date.now() };
 		}
 	}
 }

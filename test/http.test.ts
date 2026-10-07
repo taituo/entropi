@@ -11,8 +11,8 @@ import { DispatchPump } from "../src/runtime/pump.ts";
 
 const core = new Core(openDb(":memory:"));
 core.createRealm({ id: "main", name: "Main", kind: "team" });
-core.addActor("main", { id: "agent:ops", kind: "agent", name: "Ops" });
-core.addActor("main", { id: "agent:dev", kind: "agent", name: "Developer" });
+core.addActor("main", { id: "agent:ops", kind: "agent", name: "Ops" }, "system");
+core.addActor("main", { id: "agent:dev", kind: "agent", name: "Developer" }, "system");
 core.createSpace("main", { id: "general", kind: "standing", name: "general", agentIds: ["agent:ops"] }, "system");
 
 const dispatched: any[] = [];
@@ -218,4 +218,15 @@ test("a person can choose to steer: the message carries the choice, and nothing 
 	assert.equal(steered.body.message.meta.steer, true);
 	const plain = await call(bob, "POST", "/api/realms/main/spaces/general/messages", { text: "@ops just this" });
 	assert.equal(plain.body.message.meta.steer, undefined);
+});
+
+test("the same rules behind the UI: a private chat's decision is a 404 for others; syncing identity on every request writes nothing", async () => {
+	const dm = (await call(alice, "POST", "/api/realms/main/dms", { agent: "ops" })).body.space.id;
+	core.createWork("main", { id: "alice-private", kind: "x", title: "private", state: "working", spaceId: dm }, "agent:ops");
+	const { decision } = core.requestDecision("main", { key: "alice-private-q", workId: "alice-private", question: "Private?", requiredAuthority: "operator" }, "agent:ops");
+	assert.equal((await call(bob, "POST", `/api/realms/main/decisions/${decision.id}/decide`, { answer: "approve" })).status, 404, "bob is an operator and could decide it, but it does not exist for him");
+	assert.equal(core.getDecision("main", decision.id)!.status, "open");
+	const before = core.events("main").length;
+	for (let i = 0; i < 5; i++) { await call(alice, "GET", "/api/me"); await call(bob, "GET", "/api/realms/main/focus"); }
+	assert.equal(core.events("main").length, before, "no event per request");
 });

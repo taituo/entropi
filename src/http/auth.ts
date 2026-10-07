@@ -68,7 +68,7 @@ export function createAuth(cfg: Pick<Config, "sessionSecret" | "cookieSecure" | 
 		login(_req: IncomingMessage, res: ServerResponse, url: URL) {
 			if (a.mode === "proxy") return void res.writeHead(302, { location: "/" }).end(); // the proxy already signed you in
 			const as = url.searchParams.get("as");
-			if (as && DEV_USERS[as]) {
+			if (as && Object.hasOwn(DEV_USERS, as)) {
 				setCookie(res, seal({ ...DEV_USERS[as], exp: Math.floor(Date.now() / 1000) + SESSION_TTL_S }), SESSION_TTL_S);
 				res.writeHead(302, { location: "/" }).end();
 				return;
