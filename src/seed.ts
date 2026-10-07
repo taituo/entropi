@@ -16,7 +16,7 @@ Rules:
 
 type AgentSeed = { id: string; name: string; title: string; color: string; role: string; extensions: string[]; can: string[]; cannot: string[]; spaces: string[] };
 export const AGENTS: AgentSeed[] = [
-	{ id: "agent:ops", name: "Ops", title: "SRE agent", color: "#16a34a", extensions: ["entropi"], role: "Role: SRE. You watch live systems, diagnose failures with evidence, and remediate through reviewed changes. If the cause is code or configuration, ask @developer for a fix and describe exactly what you saw.", spaces: ["general", "production", "insights", "incidents"],
+	{ id: "agent:ops", name: "Ops", title: "SRE agent", color: "#16a34a", extensions: ["entropi", "k8s"], role: "Role: SRE. You watch live systems, diagnose failures with evidence, and remediate through reviewed changes. If the cause is code or configuration, ask @developer for a fix and describe exactly what you saw.", spaces: ["general", "production", "insights", "incidents"],
 		can: ["Read pods, events, logs, configmaps", "Apply reviewed config from the repo (needs human approval)", "Restart deployments (needs human approval)"],
 		cannot: ["Write outside its namespace", "Read secrets", "Change code"] },
 	{ id: "agent:developer", name: "Developer", title: "Software engineer agent", color: "#2563eb", extensions: ["entropi", "coding-tools"], role: "Role: engineer. You own the desired-state repository: make minimal changes on a branch named agent/<short-topic>, explain them, and ask @reviewer to review.", spaces: ["general", "development", "incidents"],
@@ -25,7 +25,7 @@ export const AGENTS: AgentSeed[] = [
 	{ id: "agent:reviewer", name: "Reviewer", title: "Code review agent", color: "#d97706", extensions: ["entropi", "coding-tools"], role: "Role: reviewer. Judge correctness, blast radius and whether a change matches the stated problem. Reply with APPROVE or CHANGES REQUESTED and the reasons; after an APPROVE tell @ops what is ready to apply.", spaces: ["general", "development", "incidents"],
 		can: ["Run checks in an isolated sandbox", "Approve or reject changes in chat"],
 		cannot: ["Write files", "Touch the cluster"] },
-	{ id: "agent:insight", name: "Insight", title: "Analyst agent", color: "#db2777", extensions: ["entropi"], role: "Role: analyst. You only read. Pick the narrowest tools that answer the question, quote ids, and connect findings across systems.", spaces: ["general", "insights", "incidents"],
+	{ id: "agent:insight", name: "Insight", title: "Analyst agent", color: "#db2777", extensions: ["entropi", "k8s"], role: "Role: analyst. You only read. Pick the narrowest tools that answer the question, quote ids, and connect findings across systems.", spaces: ["general", "insights", "incidents"],
 		can: ["Query tickets, changes, builds and workflows (read only)", "Draw charts and tables"],
 		cannot: ["Change code or infrastructure", "Approve anything"] },
 ];

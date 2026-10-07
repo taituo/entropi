@@ -22,6 +22,31 @@ export interface ToolHost {
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t.length > 6000 ? `${t.slice(0, 6000)}\n... [truncated]` : t }] });
 const fail = (e: unknown) => ({ isError: true, content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }] });
 
+
+/**
+ * Ask the humans in the agent's space to decide, and wait. Work item and decision are keyed by the Pi task id, so a rerun after a
+ * crash finds the same ones (the tool is replay-safe because of this). Shared by every tool that needs a human's yes.
+ */
+export async function askApproval(host: ToolHost, api: { taskId: unknown; conversationId: unknown }, context: { abortSignal?: AbortSignal }, req: { action: string; details: Record<string, unknown> }): Promise<{ approved: boolean; text: string; by: string | null; decision: DecisionRequest }> {
+	const { core } = host;
+	const loc = host.locate(api.conversationId);
+	if (!loc) throw new Error("this conversation is not attached to a space");
+	const workId = `appr-${api.taskId}`;
+	core.createWork(loc.realmId, { id: workId, kind: "approval", title: req.action, ownerId: loc.agentId, spaceId: loc.spaceId, state: "working" }, loc.agentId);
+	const { decision } = core.requestDecision(loc.realmId, { key: `ap:${api.taskId}`, workId, question: req.action, context: req.details, urgency: "normal", requiredAuthority: "approver" }, loc.agentId);
+	failpoint("tool:after-decision");
+	const d = await host.waitDecision(loc.realmId, decision.id, context.abortSignal);
+	const by = d.decidedBy ? core.getActor(loc.realmId, d.decidedBy)?.name ?? d.decidedBy : null;
+	if (d.status === "decided" && d.answer === d.options[0]) {
+		core.setWorkState(loc.realmId, workId, "done", loc.agentId, { reason: "approved" });
+		return { approved: true, by, decision: d, text: `APPROVED by ${by}${d.note ? ` (${d.note})` : ""}.` };
+	}
+	core.setWorkState(loc.realmId, workId, "cancelled", loc.agentId, { reason: d.status });
+	return { approved: false, by, decision: d, text: d.status === "decided"
+		? `REJECTED by ${by}${d.note ? `: ${d.note}` : ""}. Do not retry or work around this; report it and stop.`
+		: `The request ended without an approval (${d.status}). Do not act; report it and stop.` };
+}
+
 /**
  * The tools every agent gets. Each one is `replay: "safe"` AND idempotent: its effect is keyed by the Pi task id, so a
  * rerun after a crash finds what the first attempt already did instead of doing it twice. (Safety must not depend on a
@@ -66,25 +91,7 @@ export function entropiExtension(host: ToolHost) {
 		replay: "safe",
 		execute: async (args, api, context) => {
 			try {
-				const loc = host.locate(api.conversationId);
-				if (!loc) throw new Error("this conversation is not attached to a space");
-				// Both ids come from the task id: a rerun after a crash lands on the same work item and the same decision.
-				const workId = `appr-${api.taskId}`;
-				core.createWork(loc.realmId, { id: workId, kind: "approval", title: args.action, ownerId: loc.agentId, spaceId: loc.spaceId, state: "working" }, loc.agentId);
-				const { decision } = core.requestDecision(loc.realmId, {
-					key: `ap:${api.taskId}`, workId, question: args.action, context: { target: args.target, reason: args.reason }, urgency: "normal", requiredAuthority: "approver",
-				}, loc.agentId);
-				failpoint("tool:after-decision");
-				const d = await host.waitDecision(loc.realmId, decision.id, context.abortSignal);
-				const by = d.decidedBy ? core.getActor(loc.realmId, d.decidedBy)?.name ?? d.decidedBy : null;
-				if (d.status === "decided" && d.answer === d.options[0]) {
-					core.setWorkState(loc.realmId, workId, "done", loc.agentId, { reason: "approved" });
-					return text(`APPROVED by ${by}${d.note ? ` (${d.note})` : ""}.`);
-				}
-				core.setWorkState(loc.realmId, workId, "cancelled", loc.agentId, { reason: d.status });
-				return text(d.status === "decided"
-					? `REJECTED by ${by}${d.note ? `: ${d.note}` : ""}. Do not retry or work around this; report it and stop.`
-					: `The request ended without an approval (${d.status}). Do not act; report it and stop.`);
+				return text((await askApproval(host, api, context, { action: args.action, details: { target: args.target, reason: args.reason } })).text);
 			} catch (e) {
 				return fail(e);
 			}

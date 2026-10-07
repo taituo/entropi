@@ -54,6 +54,13 @@ export function scriptedModel(gate = makeGate()) {
 			if (n === 1) return fauxAssistantMessage([fauxToolCall("bash", { command: "python3 hello.py" })], { stopReason: "toolUse" });
 			return fauxAssistantMessage(`done: ${lastResultText(ctx).replace(/\s+/g, " ").slice(0, 160)}`);
 		}
+		if (/\bk8sfix\b/.test(text)) {
+			const n = resultsSoFar(ctx);
+			if (n === 0) return fauxAssistantMessage([fauxToolCall("k8s_pods", { namespace: "demo-apps" })], { stopReason: "toolUse" });
+			if (n === 1) return fauxAssistantMessage([fauxToolCall("k8s_apply_configmap", { namespace: "demo-apps", name: "checkout-config", data: { POOL_SIZE: "10" }, restart: "checkout-api", reason: "POOL_SIZE=0 crash loop" })], { stopReason: "toolUse" });
+			if (n === 2) return fauxAssistantMessage([fauxToolCall("k8s_pods", { namespace: "demo-apps" })], { stopReason: "toolUse" });
+			return fauxAssistantMessage(`done: ${lastResultText(ctx).replace(/\s+/g, " ").slice(0, 200)}`);
+		}
 		if (/\bcountrun\b/.test(text)) {
 			if (resultsSoFar(ctx) === 0) return fauxAssistantMessage([fauxToolCall("bash", { command: "echo x >> /work/count.txt; wc -l < /work/count.txt" })], { stopReason: "toolUse" });
 			return fauxAssistantMessage(`done: ${lastResultText(ctx).replace(/\s+/g, " ").slice(0, 200)}`);

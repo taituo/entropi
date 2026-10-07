@@ -7,6 +7,8 @@ import { openDb } from "./core/db.ts";
 import { ScriptedAgents } from "./adapters/demo/scripted.ts";
 import { buildInference, inferenceFromEnv } from "./adapters/pi/inference.ts";
 import { PiRuntime } from "./adapters/pi/runtime.ts";
+import { k8sExtension } from "./adapters/pi/k8s-tools.ts";
+import { FakeWorld } from "./adapters/fake-world/world.ts";
 import { createApp } from "./http/app.ts";
 import { DispatchPump } from "./runtime/pump.ts";
 import { createUploads } from "./http/uploads.ts";
@@ -39,12 +41,14 @@ const live = (m: import("./core/types.ts").Message) => app.hub.live({ realmId: m
 // configured and AIRGAPPED is not set. With no model configured at all, scripted demo agents stand in.
 const inferenceCfg = inferenceFromEnv(process.env);
 const inference = buildInference(inferenceCfg);
+// The demo source: a fake cluster behind the EntropiSource port. A real cluster adapter would take its place here.
+const world = new FakeWorld();
 let dispatcher;
 if (inference.providers.length) {
 	runtime = new PiRuntime({
 		core, storage: await openNodeSqliteStorage(join(config.dataDir, "pi.sqlite")), inference, live, memory: new OptChat(openMemoryDb(join(config.dataDir, "memory.sqlite"))), images: createUploads(join(config.dataDir, "uploads")),
 		// Pi's own coding tools (read, write, edit, bash); with a sandbox they run in it, without one they fail plainly.
-		extensions: [CodingTools],
+		extensions: (host) => [CodingTools, k8sExtension({ ...host, source: () => world, readNamespaces: ["demo-apps"], writeNamespaces: ["demo-apps"] })],
 		env: sandboxes ? sandboxEnvResolver({ core, manager: sandboxes, locate: (id) => runtime?.locate(id) }) : undefined,
 	});
 	await runtime.start();
