@@ -80,6 +80,15 @@ CREATE TABLE attachments (
   realm_id TEXT NOT NULL, id TEXT NOT NULL, space_id TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
   owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (realm_id, space_id, id));
 `,
+	// Attachments are content-addressed: the same picture may be uploaded by several people into one space.
+	`
+CREATE TABLE attachments2 (
+  realm_id TEXT NOT NULL, id TEXT NOT NULL, space_id TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
+  owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (realm_id, space_id, id, owner_id));
+INSERT INTO attachments2 SELECT realm_id, id, space_id, name, mime, size, owner_id, created_at FROM attachments;
+DROP TABLE attachments;
+ALTER TABLE attachments2 RENAME TO attachments;
+`,
 ];
 
 export function openDb(path: string): DatabaseSync {

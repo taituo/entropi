@@ -145,10 +145,11 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 	if (m === "POST" && (r = /^\/spaces\/([\w-]+)\/messages$/.exec(rest))) {
 		const spaceId = r[1];
 		const body = await readBody(req);
+		if (!core.getSpace(realmId, spaceId) || !core.canSee(realmId, me.id, spaceId)) throw httpError(404, "no such space"); // before anything about the body is looked at
 		const ids: string[] = Array.isArray(body.attachments) ? body.attachments.map(String) : [];
 		if (ids.length > MAX_IMAGES_PER_MESSAGE) throw httpError(400, `at most ${MAX_IMAGES_PER_MESSAGE} images per message`);
-		const atts = ids.map((id) => core.getAttachment(realmId, spaceId, id, me.id));
-		if (atts.some((a) => !a || a.ownerId !== me.id)) throw httpError(400, "unknown attachment");
+		const atts = ids.map((id) => core.getAttachment(realmId, spaceId, id, me.id, me.id)); // only your own uploads
+		if (atts.some((a) => !a)) throw httpError(400, "unknown attachment");
 		if (atts.reduce((n, a) => n + a!.size, 0) > MAX_IMAGE_BYTES_PER_MESSAGE) throw httpError(413, "images in one message are limited to 10 MB in total");
 		const text = String(body.text ?? "").trim() || (atts.length ? "(image)" : "");
 		if (!text || text.length > 4000) throw httpError(400, "message must be 1-4000 characters");

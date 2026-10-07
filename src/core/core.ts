@@ -647,14 +647,17 @@ export class Core {
 			this.actor(realmId, by);
 			if (!this.canPost(realmId, by, spaceId)) throw forbidden("you cannot post here");
 			this.db.prepare("INSERT OR IGNORE INTO attachments (realm_id, id, space_id, name, mime, size, owner_id, created_at) VALUES (?,?,?,?,?,?,?,?)").run(realmId, o.id, spaceId, o.name.slice(0, 120), o.mime, o.size, by, this.now());
-			return this.getAttachment(realmId, spaceId, o.id, by)!;
+			return this.getAttachment(realmId, spaceId, o.id, by, by)!;
 		});
 	}
 
 	/** Visible only to people who can see the space the file was shared in. */
-	getAttachment(realmId: Id, spaceId: Id, id: Id, forActor: Id): Attachment | undefined {
+	getAttachment(realmId: Id, spaceId: Id, id: Id, forActor: Id, ownedBy?: Id): Attachment | undefined {
 		if (!this.canSee(realmId, forActor, spaceId)) return undefined;
-		const r = this.db.prepare("SELECT * FROM attachments WHERE realm_id = ? AND space_id = ? AND id = ?").get(realmId, spaceId, id) as Row | undefined;
+		// Files are content-addressed, so two people can upload the same picture to one space: each has their own row.
+		const r = (ownedBy
+			? this.db.prepare("SELECT * FROM attachments WHERE realm_id = ? AND space_id = ? AND id = ? AND owner_id = ?").get(realmId, spaceId, id, ownedBy)
+			: this.db.prepare("SELECT * FROM attachments WHERE realm_id = ? AND space_id = ? AND id = ? ORDER BY created_at LIMIT 1").get(realmId, spaceId, id)) as Row | undefined;
 		return r ? { realmId, id: r.id, spaceId, name: r.name, mime: r.mime, size: r.size, ownerId: r.owner_id, createdAt: r.created_at } : undefined;
 	}
 
