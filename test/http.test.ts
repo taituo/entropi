@@ -212,3 +212,10 @@ test("sandboxes: listed only for spaces you can see; stopping needs the operator
 	assert.equal((await call(bob, "POST", "/api/realms/main/spaces/general/sandbox/stop", {})).status, 200);
 	assert.deepEqual(stopped, ["main:general"]);
 });
+
+test("a person can choose to steer: the message carries the choice, and nothing else changes", async () => {
+	const steered = await call(bob, "POST", "/api/realms/main/spaces/general/messages", { text: "@ops change course", mode: "steer" });
+	assert.equal(steered.body.message.meta.steer, true);
+	const plain = await call(bob, "POST", "/api/realms/main/spaces/general/messages", { text: "@ops just this" });
+	assert.equal(plain.body.message.meta.steer, undefined);
+});

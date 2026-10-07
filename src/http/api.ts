@@ -154,7 +154,7 @@ export async function api(req: IncomingMessage, res: ServerResponse, url: URL, u
 		// message (outbox), so a crash cannot lose it.
 		const { present, absent } = core.mentions(realmId, spaceId, text);
 		const targets = space.kind === "dm" ? space.agentIds : present;
-		const { message } = core.postMessage(realmId, spaceId, me.id, { text, dispatchTo: targets, meta: atts.length ? { images: atts.map((a) => ({ id: a!.id, name: a!.name, mime: a!.mime, size: a!.size })) } : {} });
+		const { message } = core.postMessage(realmId, spaceId, me.id, { text, dispatchTo: targets, meta: { ...(atts.length ? { images: atts.map((a) => ({ id: a!.id, name: a!.name, mime: a!.mime, size: a!.size })) } : {}), ...(body.mode === "steer" ? { steer: true } : {}) } });
 		for (const id of absent) core.postMessage(realmId, spaceId, "system", { kind: "notice", text: `${handleOf(id)} is not in #${space.id}. Agents here: ${space.agentIds.map(handleOf).join(", ")}.` });
 		return json(res, 200, { message, dispatchedTo: targets });
 	}

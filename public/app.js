@@ -210,12 +210,13 @@ function Message({ m, me, agentIds, onDecide, onAction }) {
 		</div></div>`;
 }
 
-function Composer({ space, agents, canPost, onSend, R }) {
+function Composer({ space, agents, canPost, onSend, R, busy: agentBusy }) {
 	const [text, setText] = useState("");
 	const [sel, setSel] = useState(0);
 	const [files, setFiles] = useState([]);
 	const [busy, setBusy] = useState(0);
 	const [err, setErr] = useState("");
+	const [steer, setSteer] = useState(false);
 	const ta = useRef();
 	const picker = useRef();
 	const m = /(?:^|\s)@([\w-]*)$/.exec(text);
@@ -234,7 +235,7 @@ function Composer({ space, agents, canPost, onSend, R }) {
 		}
 	};
 	const canSend = canPost && busy === 0 && (text.trim() || files.length);
-	const send = () => { if (canSend) { onSend(text.trim(), files.map((f) => f.id)); setText(""); setFiles([]); } };
+	const send = () => { if (canSend) { onSend(text.trim(), files.map((f) => f.id), agentBusy && steer ? "steer" : undefined); setText(""); setFiles([]); } };
 	useEffect(() => { const t = ta.current; if (t) { t.style.height = "auto"; t.style.height = t.scrollHeight + "px"; } }, [text]);
 	useEffect(() => { setFiles([]); setErr(""); }, [space.id]);
 	return html`<div class="composer" onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => { e.preventDefault(); if (canPost) upload(e.dataTransfer.files); }}>
@@ -252,6 +253,7 @@ function Composer({ space, agents, canPost, onSend, R }) {
 					if (options.length && e.key === "ArrowDown") { e.preventDefault(); return setSel((sel + 1) % options.length); }
 					if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 				}} />
+			${agentBusy && html`<button class=${"mode" + (steer ? " on" : "")} title="An agent is working. Queue: it answers after the current run. Steer: your message joins the run in progress." onClick=${() => setSteer(!steer)}>${steer ? "↪ steer now" : "queue"}</button>`}
 			<button class="send" disabled=${!canSend} onClick=${send}>Send</button>
 		</div>
 		<div class="hint">${err ? html`<span style="color:var(--bad)">${err}</span>` : space.kind === "dm" ? `Only you can see this chat. ${space.name} answers every message.` : "Agents only act when mentioned. Shift+Enter for a new line. Paste or drop images to share them."}</div>
@@ -393,7 +395,7 @@ function App() {
 		try { const d = await api(R("/spaces"), { body: { topic: v } }); setNewCase(null); go(d.space); } catch (err) { flash(err.message); }
 	};
 	const openDm = (handle) => api(R("/dms"), { body: { agent: handle } }).then((d) => go(d.space)).catch((err) => flash(err.message));
-	const send = (text, attachments = []) => { stick.current = true; return api(R(`/spaces/${space.id}/messages`), { body: { text, attachments } }).catch((e) => flash(e.message)); };
+	const send = (text, attachments = [], mode) => { stick.current = true; return api(R(`/spaces/${space.id}/messages`), { body: { text, attachments, mode } }).catch((e) => flash(e.message)); };
 	const stop = (a) => api(R(`/spaces/${space.id}/agents/${a.handle}/stop`), { body: {} }).then((r) => flash(r.stopped ? "Stopped" : "Nothing was running")).catch((e) => flash(e.message));
 	const decide = (id, answer, note) => api(R(`/decisions/${id}/decide`), { body: { answer, note } }).then(loadFocus).catch((e) => flash(e.message));
 	const archive = (id, on) => api(R(`/spaces/${id}/${on ? "archive" : "reopen"}`), { body: {} }).catch((err) => flash(err.message));
@@ -438,7 +440,7 @@ function App() {
 			<div class="timeline" ref=${tl} onScroll=${(e) => { const t = e.target; stick.current = t.scrollHeight - t.scrollTop - t.clientHeight < 80; }}>
 				${messages.map((m) => html`<${Message} key=${m.id} m=${m} me=${me} agentIds=${agentIds} onDecide=${decide} onAction=${(a) => a.type === "message" && send(a.text)} />`)}
 			</div>
-			<${Composer} space=${space} agents=${space.kind === "dm" ? [] : spAgents} canPost=${me.perms.post && space.status === "open"} onSend=${send} R=${R} />
+			<${Composer} space=${space} agents=${space.kind === "dm" ? [] : spAgents} canPost=${me.perms.post && space.status === "open"} onSend=${send} R=${R} busy=${spAgents.some((a) => presence[a.id]?.state === "working")} />
 		</main>
 		<aside class="ctx">
 			<${FocusPanel} focus=${focus} open=${setSpaceId} />

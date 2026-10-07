@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
-import { createRegistry, Harness, watchEvents, type Conversation, type EntryRecord, type Extension, type Storage, type SubmissionId } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, type Conversation, type ConversationView, type EntryRecord, type Extension, type Storage, type SubmissionId } from "@earendil-works/pi-durable";
 import { handleOf } from "../../core/core.ts";
 import type { Core } from "../../core/core.ts";
 import type { AgentControl, AgentDispatcher } from "../../core/ports.ts";
@@ -59,6 +59,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 	private creating = new Map<string, Promise<Conversation>>();
 	private tracking = new Set<number>(); // reply message ids being awaited
 	private lives = new Map<string, LiveState>();
+	private views: { dispose(): void }[] = [];
 	private closed = false;
 	private decisionWaiters = new Set<() => void>();
 	private off?: () => void;
@@ -95,7 +96,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		// Decisions made by people wake any tool that waits for them.
 		this.off = this.core.subscribe((e) => { if (e.type.startsWith("decision.")) for (const w of [...this.decisionWaiters]) w(); });
 		await this.indexBindings();
-		for (const [key, id] of [...this.convs]) await this.attach(key, id);
+		for (const conv of this.convs.values()) await this.attach(conv);
 		await this.recover();
 		this.harness.resume();
 	}
@@ -105,6 +106,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		this.off?.();
 		for (const w of [...this.decisionWaiters]) w();
 		for (const l of this.lives.values()) clearTimeout(l.timer);
+		for (const v of this.views) v.dispose();
 		await this.harness?.close(ctx);
 	}
 
@@ -198,7 +200,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 			}, ctx);
 			this.convs.set(key, conv);
 			this.locs.set(String(conv.id), loc);
-			await this.attach(key, conv);
+			await this.attach(conv);
 			return conv;
 		})().finally(() => this.creating.delete(key));
 		this.creating.set(key, p);
@@ -232,7 +234,9 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		const header = `[${space.kind === "dm" ? "private chat" : `#${space.id}`}] ${core.getActor(o.realmId, o.from)?.kind === "agent" ? `@${handleOf(o.from)} (agent)` : sender}: ${o.text}`;
 		const content = await this.contentFor(o, header, loc);
 		// 2. Exactly-once on Pi's side: the same requestId always returns the same submission.
-		const sub = await conv.submit({ type: "input", content, requestId }, ctx);
+		// "steer" (a person chose it) joins the run in progress after its current tool round; the default queues behind it.
+		const steer = core.getMessage(o.realmId, o.messageId)?.meta.steer === true;
+		const sub = await conv.submit({ type: "input", content, requestId, ...(steer ? { whenBusy: "steer" as const } : {}) }, ctx);
 		failpoint("dispatch:after-submit");
 		this.track(reply, sub.id);
 	}
@@ -310,7 +314,11 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 			activity = p.activity;
 			failures = p.failures;
 		} else return;
-		const done = core.updateMessage(cur.realmId, messageId, cur.authorId, { text: body || "(no answer)", meta: { ...cur.meta, activity, ...(failures.length ? { failures } : {}) }, status: "done" });
+		// Inputs that were steered into a run in progress are answered by that run's single answer: say so once instead of repeating it.
+		const answerEntry = rec.status === "done" ? Number(rec.answer) : undefined;
+		const twin = answerEntry === undefined ? undefined : core.db.prepare("SELECT id FROM messages WHERE kind = 'agent' AND status = 'done' AND id != ? AND json_extract(meta, '$.pi.thread') = ? AND json_extract(meta, '$.pi.answerEntry') = ?").get(messageId, pi.thread, answerEntry);
+		if (twin) { body = "↪ Answered together with the message above."; activity = []; }
+		const done = core.updateMessage(cur.realmId, messageId, cur.authorId, { text: body || "(no answer)", meta: { ...cur.meta, pi: { ...(cur.meta.pi as object), ...(answerEntry !== undefined ? { answerEntry } : {}) }, activity, ...(failures.length ? { failures } : {}) }, status: "done" });
 		for (const f of failures) console.warn(`[pi] failed generation attempt in ${pi.thread} (entry ${f.entry}, ${f.stopReason}): ${f.error || "no error message"}`);
 		this.opts.live?.(done);
 		await this.memory.sync(pi.thread, new PiTranscript(this.storage, ctx), () => this.builder.onLeaf(pi.thread)).catch((e) => console.warn("memory sync failed", e));
@@ -330,92 +338,57 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 
 	// ------------------------------------------------------------------ live streaming (ephemeral overlay)
 
-	private async attach(key: string, conv: Conversation | any) {
-		const id = String(conv.id ?? conv);
-		const stream = await watchEvents(this.harness, conv.id ?? conv, ctx);
-		const live: LiveState = { current: undefined, text: new Map(), final: "", activity: [], timer: undefined };
-		this.lives.set(id, live);
-		await this.onEvent(id, live, stream.snapshot);
-		stream.start(async (events) => { for (const ev of events) await this.onEvent(id, live, ev).catch((e) => console.error("event error", e)); });
+	/**
+	 * The one place that listens to a conversation. It uses `viewState()` (the stable structural view: the active transcript
+	 * plus the `pi.live` document with the run, the in-flight message and the tool slots), not the Experimental `watchEvents`.
+	 * The streamed text and tool activity are `project()` of that very transcript, the same function that writes the final
+	 * message, so live and final can never disagree.
+	 */
+	private async attach(conv: Conversation) {
+		const thread = String(conv.id);
+		const st: LiveState = { timer: undefined };
+		this.lives.set(thread, st);
+		const view = await conv.viewState(ctx);
+		this.views.push(view);
+		const onView = (v: ConversationView) => void this.onView(st, v).catch((e) => console.error("view error", e));
+		onView(view.value);
+		view.subscribe(onView);
 	}
 
-	private async resolveCurrent(inputs: readonly unknown[]): Promise<Message | undefined> {
+	private async onView(st: LiveState, v: ConversationView) {
+		const run = (v.docs["pi.live"] as any)?.run as { inputs: unknown[] } | undefined;
+		if (!run) { st.current = undefined; st.runKey = undefined; return; } // the run ended: finalize() writes the final message
+		const key = run.inputs.join(",");
+		if (st.runKey !== key) { st.runKey = key; Object.assign(st, await this.resolveCurrent(run.inputs)); }
+		st.view = v;
+		this.flush(st);
+	}
+
+	/** The reply row of the run in progress, and the transcript entry where that run starts. */
+	private async resolveCurrent(inputs: readonly unknown[]): Promise<{ current?: Message; entryId?: number }> {
 		for (const sid of inputs) {
 			const rec = await this.storage.submission(sid as any, ctx);
 			const m = /^msg:(\d+):(.+)$/.exec(rec?.requestId ?? "");
-			if (!m) continue;
+			if (!m || !rec?.entry) continue;
 			const row = this.core.db.prepare("SELECT id, realm_id FROM messages WHERE request_id = ?").get(`reply:${m[1]}:${m[2]}`) as { id: number; realm_id: string } | undefined;
 			const msg = row && this.core.getMessage(row.realm_id, row.id);
-			if (msg && msg.status === "working") return msg;
+			if (msg && msg.status === "working") return { current: msg, entryId: Number(rec.entry) };
 		}
-		return undefined;
+		return { current: undefined, entryId: undefined };
 	}
 
-	private flush(live: LiveState, now = false) {
-		if (!live.current) return;
-		if (!now) { live.timer ??= setTimeout(() => this.flush(live, true), 120); return; }
-		clearTimeout(live.timer); live.timer = undefined;
-		const cur = this.core.getMessage(live.current.realmId, live.current.id);
-		if (!cur || cur.status !== "working") return; // finalised meanwhile: the transcript projection wins
-		const partial = [...live.text.entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1]).join("");
-		const display = [live.final, partial].filter(Boolean).join(live.final && partial ? "\n\n" : "");
-		const m = this.core.updateMessage(cur.realmId, cur.id, cur.authorId, { text: display, meta: { ...cur.meta, activity: live.activity } });
+	private flush(st: LiveState, now = false) {
+		if (!st.current) return;
+		if (!now) { st.timer ??= setTimeout(() => this.flush(st, true), 120); return; }
+		clearTimeout(st.timer); st.timer = undefined;
+		const cur = this.core.getMessage(st.current.realmId, st.current.id);
+		if (!cur || cur.status !== "working" || !st.view) return; // finalised meanwhile: the transcript projection wins
+		const p = project(st.view.entries.filter((e) => Number(e.id) >= (st.entryId ?? 0)));
+		const partial = textOf(((st.view.docs["pi.live"] as any)?.generation?.message)?.content).trim();
+		if (partial.length > 3) failpoint("stream:mid");
+		const display = [p.text, partial].filter(Boolean).join("\n\n");
+		const m = this.core.updateMessage(cur.realmId, cur.id, cur.authorId, { text: display, meta: { ...cur.meta, activity: p.activity } });
 		this.opts.live?.(m);
-	}
-
-	private async onEvent(id: string, live: LiveState, ev: any) {
-		switch (ev.type) {
-			case "snapshot":
-				live.text.clear(); live.final = ""; live.activity = [];
-				if (ev.run) {
-					live.current = await this.resolveCurrent(ev.run.inputs);
-					const m = ev.generation?.message;
-					if (m) live.text.set(0, textOf(m.content));
-					this.flush(live);
-				} else live.current = undefined;
-				break;
-			case "run_start":
-				live.text.clear(); live.final = ""; live.activity = [];
-				live.current = await this.resolveCurrent(ev.inputs);
-				break;
-			case "message_start":
-				live.text.clear();
-				break;
-			case "message_update":
-				for (const c of ev.changes) {
-					if (c.type === "text_start") live.text.set(c.contentIndex, c.block.text ?? "");
-					else if (c.type === "text_delta") live.text.set(c.contentIndex, (live.text.get(c.contentIndex) ?? "") + c.delta);
-					else if (c.type === "block" && c.block.type === "text") live.text.set(c.contentIndex, c.block.text);
-					else if (c.type === "message") { live.text.clear(); live.text.set(0, textOf(c.message.content)); }
-				}
-				this.flush(live);
-				if (live.text.size && [...live.text.values()].join("").length > 3) failpoint("stream:mid");
-				break;
-			case "message_end": {
-				const msg = ev.entry?.model?.[0];
-				live.text.clear();
-				if (msg?.role === "assistant") {
-					const t = textOf(msg.content).trim();
-					if (t) live.final = live.final ? `${live.final}\n\n${t}` : t;
-				}
-				this.flush(live);
-				break;
-			}
-			case "tool_execution_start":
-				live.activity.push({ id: ev.toolCallId, name: ev.toolName, args: short(ev.args, 220), status: "running" });
-				this.flush(live);
-				break;
-			case "tool_execution_end": {
-				const a = live.activity.find((x) => x.id === ev.toolCallId);
-				const res = ev.entry?.model?.[0];
-				if (a) { a.status = !ev.entry || res?.isError ? "error" : "done"; a.preview = short(textOf(res?.content), 500); }
-				this.flush(live);
-				break;
-			}
-			case "run_end":
-				this.flush(live, true);
-				break;
-		}
 	}
 
 	// ------------------------------------------------------------------ decisions
@@ -519,7 +492,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 	}
 }
 
-type LiveState = { current: Message | undefined; text: Map<number, string>; final: string; activity: Step[]; timer: NodeJS.Timeout | undefined };
+type LiveState = { current?: Message; entryId?: number; runKey?: string; view?: ConversationView; timer: NodeJS.Timeout | undefined };
 
 /** The text and tool activity of a run, as a pure function of its transcript entries. */
 export function project(entries: readonly EntryRecord[]): { text: string; activity: Step[]; failures: { entry: number; stopReason: string; error: string }[] } {

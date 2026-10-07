@@ -171,3 +171,25 @@ test("consult: stopping the parent stops the helper it owns (Pi's own abort casc
 	w.gate.release();
 	await w.close();
 });
+
+test("steer: a person's message can join a run in progress instead of queueing behind it", async () => {
+	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage() });
+	await w.start();
+	ask(w.core, "@ops HOLD the first one");
+	await until(() => w.core.workingMessages().length === 1 && w.faux.state.callCount >= 1);
+	w.core.postMessage("main", "incidents", "human:anna", { text: "@ops also this", dispatchTo: ["agent:ops"], meta: { steer: true } });
+	w.core.postMessage("main", "incidents", "human:anna", { text: "@ops and this later", dispatchTo: ["agent:ops"] });
+	const { BACKGROUND_CONTEXT: ctx } = await import("@earendil-works/chord/context");
+	const convId = (await w.runtime.storage.scanConversations({}, 5, undefined, ctx)).items[0].id;
+	const view = await (await w.runtime.harness.conversation(convId, ctx))!.viewState(ctx);
+	const modes = () => (((view.value.docs["pi.inbox"] as any)?.items ?? []) as { mode: string }[]).map((x) => x.mode).sort();
+	await until(() => modes().length === 2);
+	assert.deepEqual(modes(), ["followUp", "steer"], "Pi holds one steer and one follow-up in its inbox");
+	view.dispose();
+	w.gate.release();
+	await until(() => replies(w.core).filter((r: any) => r.status === "done").length === 3, 20_000);
+	const texts: string[] = replies(w.core).map((r: any) => String(r.text));
+	assert.equal(texts.filter((t) => /Answered together/.test(t)).length, 1, "a message that shared an answer says so instead of repeating it");
+	assert.equal(new Set(texts.filter((t) => /^echo:/.test(t))).size, texts.filter((t) => /^echo:/.test(t)).length, "no answer text is shown twice");
+	await w.close();
+});
