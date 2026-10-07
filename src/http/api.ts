@@ -92,19 +92,19 @@ export function eventView(core: Core, e: ActivityEvent): { type: string; payload
 export type SandboxControl = { list(): { key: string; createdAt: number; lastUsed: number }[]; stop(key: string): Promise<boolean> };
 export type Deps = { core: Core; hub: Hub; uploads: Uploads; control?: () => AgentControl | undefined; sandboxes?: () => SandboxControl | undefined; config: Pick<Config, "brand" | "defaultRealm"> };
 
-/** All routes live under /api/realms/:realm; a person who is not a member gets 404, never 403. */
+/** The API is versioned in its path: /api/v1/me and /api/v1/realms/:realm/... (unversioned paths do not exist). All realm routes live under the realm; a person who is not a member gets 404, never 403. */
 export async function api(req: IncomingMessage, res: ServerResponse, url: URL, user: User, d: Deps) {
 	const { core } = d;
 	const m = req.method ?? "GET";
 	const path = url.pathname;
 	if (m !== "GET" && req.headers["x-requested-with"] !== "entropi") throw httpError(403, "missing X-Requested-With");
 
-	if (m === "GET" && path === "/api/me") {
+	if (m === "GET" && path === "/api/v1/me") {
 		const realms = core.listRealms().filter((r) => core.getActor(r.id, humanId(user.sub)));
 		return json(res, 200, { user: { sub: user.sub, id: humanId(user.sub), name: user.name }, brand: d.config.brand, defaultRealm: d.config.defaultRealm, realms });
 	}
 
-	const mm = /^\/api\/realms\/([a-z0-9][a-z0-9._-]*)(\/.*)?$/.exec(path);
+	const mm = /^\/api\/v1\/realms\/([a-z0-9][a-z0-9._-]*)(\/.*)?$/.exec(path);
 	if (!mm) throw httpError(404, "no such endpoint");
 	const realmId = mm[1], rest = mm[2] ?? "";
 	const me = core.getActor(realmId, humanId(user.sub));

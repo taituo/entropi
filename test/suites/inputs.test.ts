@@ -51,8 +51,8 @@ test("inputs: extra and hostile keys are ignored; prototype keys change nothing"
 		}
 		assert.equal((await t.call(op(), "POST", "/dms", { agent: id })).status, 400, `DM with agent "${id}"`);
 	}
-	assert.equal((await t.call(op(), "GET", "/api/realms/__proto__")).status, 404);
-	assert.equal((await t.call(op(), "GET", "/api/realms/constructor/spaces")).status, 404);
+	assert.equal((await t.call(op(), "GET", "/api/v1/realms/__proto__")).status, 404);
+	assert.equal((await t.call(op(), "GET", "/api/v1/realms/constructor/spaces")).status, 404);
 });
 
 test("inputs: attachments: not a list, too many, repeated, unknown, wrong types", async () => {

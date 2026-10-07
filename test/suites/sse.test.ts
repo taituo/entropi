@@ -73,6 +73,6 @@ test("sse: odd resume ids are harmless: garbage, negative, zero and a huge numbe
 });
 
 test("sse: no login is refused, and a stream for another realm is a 404", async () => {
-	const bad = await t.call(t.users.viewer!, "GET", "/api/realms/nope/events");
+	const bad = await t.call(t.users.viewer!, "GET", "/api/v1/realms/nope/events");
 	assert.equal(bad.status, 404);
 });

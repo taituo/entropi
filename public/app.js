@@ -334,13 +334,13 @@ function App() {
 	const realmRef = useRef("");
 
 	const flash = (t) => { setToast(t); setTimeout(() => setToast(""), 3500); };
-	const R = (p) => `/api/realms/${realmRef.current}${p}`;
+	const R = (p) => `/api/v1/realms/${realmRef.current}${p}`;
 	const loadMessages = (id) => api(R(`/spaces/${id}/messages`)).then((d) => spaceRef.current === id && setMessages(d.messages)).catch(() => {});
 	const loadFocus = () => api(R("/focus")).then((d) => setFocus(d.focus)).catch(() => {});
 
 	useEffect(() => {
 		(async () => {
-			const who = await api("/api/me");
+			const who = await api("/api/v1/me");
 			realmRef.current = who.defaultRealm;
 			const d = await api(R(""));
 			const agents = d.actors.filter((a) => a.kind === "agent").map((a) => ({ ...a, handle: a.id.split(":").pop(), profile: a.profile || {}, color: a.profile?.color, title: a.profile?.title }));

@@ -74,7 +74,7 @@ for (const row of rows) {
 test("matrix: the doors themselves: no login is 401, a write without the CSRF header is 403, unknown routes and realms are 404", async () => {
 	const some = t.users.operator!;
 	assert.equal((await t.call(some, "POST", "/spaces/general/messages", { text: "x" }, { csrf: false })).status, 403);
-	assert.equal((await t.call(some, "GET", "/api/realms/nope")).status, 404);
+	assert.equal((await t.call(some, "GET", "/api/v1/realms/nope")).status, 404);
 	assert.equal((await t.call(some, "GET", "/nothing-here")).status, 404);
 	assert.equal((await t.call(some, "GET", "/spaces/general/unknown-thing")).status, 404);
 	assert.equal((await t.call(some, "GET", "/spaces/no-such-space/messages")).status, 404);

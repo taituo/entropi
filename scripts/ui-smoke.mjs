@@ -29,7 +29,7 @@ async function open(user, viewport = { width: 1360, height: 860 }, hash = "") {
 	if (hash) { await page.goto(`${BASE}/${hash}`); await page.reload(); await page.waitForSelector(".timeline", { timeout: 20000 }); }
 	return page;
 }
-const api = (page, path) => page.evaluate(async (p) => (await fetch(`/api/realms/main${p}`, { headers: { "x-requested-with": "entropi" } })).json(), path);
+const api = (page, path) => page.evaluate(async (p) => (await fetch(`/api/v1/realms/main${p}`, { headers: { "x-requested-with": "entropi" } })).json(), path);
 const timelineText = (page) => page.locator(".timeline").innerText();
 const onScreen = async (loc) => { const b = await loc.boundingBox(); return !!b && b.x + b.width > 1; };
 const shot = (page, name) => page.screenshot({ path: `${OUT}/${name}` });
@@ -81,7 +81,7 @@ for (const user of ["alice", "carol"]) {
 	const mine = (await api(p, "")).spaces;
 	ok(`${user}: the API list holds none of bob's private chats`, bobDms.every((id) => !mine.some((s) => s.id === id)));
 	ok(`${user}: the sidebar shows exactly the private chats that are theirs`, (await p.locator(".side .item:has-text('🔒')").count()) === mine.filter((s) => s.kind === "dm").length);
-	const direct = await p.evaluate(async (id) => (await fetch(`/api/realms/main/spaces/${id}/messages`, { headers: { "x-requested-with": "entropi" } })).status, bobDms[0]);
+	const direct = await p.evaluate(async (id) => (await fetch(`/api/v1/realms/main/spaces/${id}/messages`, { headers: { "x-requested-with": "entropi" } })).status, bobDms[0]);
 	ok(`${user}: asking for bob's private chat by id is a 404`, direct === 404);
 	await p.goto(`${BASE}/#${bobDms[0]}`); await p.reload(); await p.waitForSelector(".shell");
 	ok(`${user}: opening its address shows no private content`, !(await p.locator("body").innerText()).includes(`private ${tag}`));

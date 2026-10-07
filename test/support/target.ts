@@ -25,7 +25,7 @@ export interface Target {
 	close(): Promise<void>;
 }
 
-const PREFIX = "/api/realms/main";
+const PREFIX = "/api/v1/realms/main";
 const ROLE_USERS: Record<Role, string> = { viewer: "vera", operator: "olga", approver: "alma", admin: "adam" };
 const CLUSTER_USERS: Partial<Record<Role, string>> = { viewer: "carol", operator: "bob", approver: "alice" };
 

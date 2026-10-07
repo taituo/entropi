@@ -14,7 +14,7 @@ async function boot(auth: Partial<typeof config.auth>) {
 	after(() => app.close());
 	return { core, base: `http://127.0.0.1:${(app.server.address() as AddressInfo).port}` };
 }
-const get = (base: string, headers: Record<string, string> = {}) => fetch(`${base}/api/realms/main`, { headers: { "x-requested-with": "entropi", ...headers } });
+const get = (base: string, headers: Record<string, string> = {}) => fetch(`${base}/api/v1/realms/main`, { headers: { "x-requested-with": "entropi", ...headers } });
 
 test("proxy mode: no identity header means 401; the header makes you a member with the default role", async () => {
 	const { base, core } = await boot({ mode: "proxy", userHeader: "x-forwarded-user", defaultRoles: ["viewer"] });
@@ -53,7 +53,7 @@ test("proxy mode: login is a no-op redirect, logout goes where configured", asyn
 test("two people whose ids start the same get different private chats, and neither can see the other's", async () => {
 	const { base, core } = await boot({ mode: "proxy", defaultRoles: ["operator"] });
 	core.addActor("main", { id: "agent:ops", kind: "agent", name: "Ops" }, "system");
-	const call = (user: string, path: string, body?: object) => fetch(`${base}/api/realms/main${path}`, { method: body ? "POST" : "GET", headers: { "x-forwarded-user": user, "x-requested-with": "entropi", "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+	const call = (user: string, path: string, body?: object) => fetch(`${base}/api/v1/realms/main${path}`, { method: body ? "POST" : "GET", headers: { "x-forwarded-user": user, "x-requested-with": "entropi", "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
 	const a = (await call("anna@example.com", "/dms", { agent: "ops" })).body.space.id;
 	const b = (await call("anna@example.org", "/dms", { agent: "ops" })).body.space.id;
 	assert.notEqual(a, b, "the chat id comes from a hash of the whole identity, not its first characters");
