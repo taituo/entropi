@@ -22,7 +22,7 @@ export type EnvHooks = {
 	afterExec?(command: string, exitCode: number | undefined): void;
 };
 
-export function createSandboxEnv(o: { id: string; ensure(): Promise<Sandbox>; hooks?: EnvHooks }): ExecutionEnv {
+export function createSandboxEnv(o: { id: string; ensure(): Promise<Sandbox>; hooks?: EnvHooks; recycle?(): Promise<void> }): ExecutionEnv {
 	const revive = (sb: Sandbox, v: any): any => {
 		if (Array.isArray(v)) return v.map((x) => revive(sb, x));
 		if (!v || typeof v !== "object") return v;
@@ -39,7 +39,7 @@ export function createSandboxEnv(o: { id: string; ensure(): Promise<Sandbox>; ho
 		const sb = await o.ensure();
 		return revive(sb, (await callRunner(sb.endpoint, sb.token, "/rpc", { m, a: enc(args) }, { timeoutMs: 60_000 })).r);
 	};
-	const exec = async (command: string | readonly string[], options: any, context: Context) => {
+	const exec = async (command: string | readonly string[], options: any, context: Context, recycled = false): Promise<any> => {
 		const sb = await o.ensure();
 		const { onOutput, ...rest } = options ?? {};
 		let result: any;
@@ -47,6 +47,12 @@ export function createSandboxEnv(o: { id: string; ensure(): Promise<Sandbox>; ho
 			signal: context.abortSignal, timeoutMs: 3_600_000,
 			onLine: (l) => { if (l.o !== undefined) onOutput?.(l.o, context, l.i); if (l.r !== undefined) result = revive(sb, l.r); },
 		}).catch((e) => { if (!context.abortSignal?.aborted) throw e; result = err(new ExecutionError("aborted", "aborted")); });
+		// A fork bomb leaves the container with no process slots: nothing can start there again. Start a fresh one, once.
+		if (result && !result.ok && result.error?.code === "spawn_error" && o.recycle && !recycled) {
+			await o.recycle();
+			onOutput?.("[the sandbox had run out of processes and was restarted; files in /work are gone]\n", context, 0);
+			return exec(command, options, context, true);
+		}
 		o.hooks?.afterExec?.(Array.isArray(command) ? command.join(" ") : String(command), result?.ok ? result.value.exitCode : undefined);
 		return result ?? err(new ExecutionError("unknown", "the sandbox returned no result"));
 	};
@@ -64,7 +70,7 @@ export function createSandboxEnv(o: { id: string; ensure(): Promise<Sandbox>; ho
 }
 
 /** The env for one space's sandbox (the key names it); `afterExec` records what was run. */
-export const sandboxEnvFor = (manager: SandboxManager, key: string, hooks?: EnvHooks) => createSandboxEnv({ id: `sandbox:${key}`, ensure: () => manager.ensure(key), hooks });
+export const sandboxEnvFor = (manager: SandboxManager, key: string, hooks?: EnvHooks) => createSandboxEnv({ id: `sandbox:${key}`, ensure: () => manager.ensure(key), hooks, recycle: async () => void (await manager.stop(key)) });
 
 /**
  * What Pi's `env` option needs: given a conversation, the sandbox of its space. A private chat is a space, so it has its own.

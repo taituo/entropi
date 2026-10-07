@@ -249,3 +249,6 @@ test("a crash right after a sandbox command ran: the command is NOT run again, a
 		cleanup(sbxContainers().filter((n) => !before.has(n)));
 	}
 });
+
+// More hostile-command tests live in their own file but must run in this process: real containers share one podman namespace.
+import "./support/sandbox-hardening.ts";
