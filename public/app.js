@@ -34,7 +34,7 @@ function md(src, agentIds) {
 }
 
 
-const PALETTE = ["#6d5efc", "#22c55e", "#f59e0b", "#ef4444", "#06b6d4", "#ec4899"];
+const PALETTE = ["#111", "#555", "#777", "#999", "#333", "#bbb"];
 const fmtX = (x, timeAxis) => (timeAxis ? new Date(x).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : String(x));
 const fmtY = (v) => (Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + "k" : Number.isInteger(v) ? String(v) : v.toFixed(1));
 
@@ -124,7 +124,7 @@ function DataTable({ t }) {
 }
 
 function Avatar({ agent, name, human }) {
-	return html`<div class=${"avatar" + (human ? " human" : "")} style=${{ background: human ? "#475069" : agent?.color || "#475069" }}>${initials(name)}</div>`;
+	return html`<div class=${"avatar" + (human ? " human" : "")}>${initials(name)}</div>`;
 }
 
 function Activity({ items }) {
@@ -177,7 +177,7 @@ function DecisionCard({ m, me, onDecide }) {
 				</dl>
 				${status === "open"
 					? me.canDecide(m)
-						? html`<input placeholder="Note (optional)" value=${note} onInput=${(e) => setNote(e.target.value)} style="width:100%;margin-bottom:8px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;color:var(--text)" />
+						? html`<input placeholder="Note (optional)" value=${note} onInput=${(e) => setNote(e.target.value)} style="width:100%;margin-bottom:8px;background:var(--bg);border:var(--border-thin);border-radius:var(--radius);padding:6px 8px;color:var(--text)" />
 							<div class="actions">${options.map((o, i) => html`<button class=${"btn " + (i === 0 ? "approve" : "reject")} disabled=${busy} onClick=${() => decide(o)}>${o[0].toUpperCase() + o.slice(1)}</button>`)}</div>`
 						: html`<div class="needs-approver">Waiting for someone with the <b>${m.meta.requiredAuthority}</b> role. You are signed in as <b>${me.roleLabel}</b>.</div>`
 					: html`<div class=${"verdict " + STATUS_CLASS(m)}>${label}${m.meta.answer ? `: ${m.meta.answer}` : ""}${m.meta.decidedBy ? ` by ${m.meta.decidedBy}` : ""}${m.meta.note ? ` — ${m.meta.note}` : ""}</div>`}
@@ -351,7 +351,8 @@ function App() {
 			setPresence(Object.fromEntries(d.presence.map((p) => [p.actorId, p])));
 			setSpaces(d.spaces);
 			document.title = who.brand.name;
-			document.documentElement.style.setProperty("--accent", who.brand.accent);
+			// Wireframe is the default look: the brand colour stays in data,
+			// it must not leak into the UI. A later theme layer may opt in.
 			loadFocus();
 			// Only what the connected runtime and host support is asked for, and later shown.
 			const caps = d.capabilities;
