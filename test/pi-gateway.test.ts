@@ -10,6 +10,7 @@ import { PiRuntime } from "../src/adapters/pi/runtime.ts";
 import { buildInference, inferenceFromEnv } from "../src/adapters/pi/inference.ts";
 import { DispatchPump } from "../src/runtime/pump.ts";
 import { seedRealm } from "../src/seed.ts";
+import { demoRealm } from "../src/demo/realm.ts";
 import { until } from "./pi-world.ts";
 
 type Seen = { headers: Record<string, string | string[] | undefined>; body: any };
@@ -39,7 +40,7 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
 async function world(env: Record<string, string>) {
 	const core = new Core(openDb(":memory:"));
-	seedRealm(core, "main");
+	seedRealm(core, demoRealm("main"));
 	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] }, "system");
 	const inference = buildInference(inferenceFromEnv({ LOCAL_LLM_BASE_URL: base, LOCAL_LLM_MODEL: "text-model", LOCAL_LLM_API_KEY: "k", AIRGAPPED: "true", ...env } as any));
 	const runtime = new PiRuntime({ core, storage: new MemoryStorage(), inference, images: { read: async () => PNG } });

@@ -2,13 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { testCore } from "./helpers.ts";
 import { seedRealm } from "../src/seed.ts";
+import { demoRealm } from "../src/demo/realm.ts";
 import { ScriptedAgents } from "../src/adapters/demo/scripted.ts";
 
 const until = async (fn: () => boolean, ms = 3000) => { const t = Date.now(); while (!fn()) { if (Date.now() - t > ms) throw new Error("timeout"); await new Promise((r) => setTimeout(r, 5)); } };
 
 test("scripted loop: message -> agent work -> approval card -> verdict -> follow-up and work done", async () => {
 	const { core } = testCore();
-	seedRealm(core, "main");
+	seedRealm(core, demoRealm("main"));
 	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] }, "system");
 	const agents = new ScriptedAgents(core, { stepMs: 1 });
 	const live: string[] = [];
@@ -33,7 +34,7 @@ test("scripted loop: message -> agent work -> approval card -> verdict -> follow
 
 test("a rejected fix leaves the work blocked and raises attention", async () => {
 	const { core } = testCore();
-	seedRealm(core, "main");
+	seedRealm(core, demoRealm("main"));
 	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] }, "system");
 	const agents = new ScriptedAgents(core, { stepMs: 1 });
 	const ask = core.postMessage("main", "incidents", "human:anna", { text: "@ops fix checkout" }).message;

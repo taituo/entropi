@@ -4,7 +4,7 @@ import { createRegistry, Harness, type Conversation, type ConversationView, type
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { handleOf } from "../../core/core.ts";
 import type { Core } from "../../core/core.ts";
-import type { AgentControl, AgentDispatcher } from "../../core/ports.ts";
+import type { AgentControl, AgentDispatcher, EntropiSource } from "../../core/ports.ts";
 import { OptChat, openMemoryDb, SUMMARY_SYSTEM } from "../../memory/optchat.ts";
 import { TreeBuilder } from "../../memory/builder.ts";
 import type { DecisionRequest, Id, Message } from "../../core/types.ts";
@@ -30,7 +30,9 @@ export type PiRuntimeOptions = {
 	/** Pushed for every streaming update of an agent message (never logged, never replayed). */
 	live?: (m: Message) => void;
 	/** More tool sets (Pi extensions), or a function that builds them from the tool host (for tools that need decisions or the space). */
-	extensions?: Extension[] | ((host: ToolHost) => Extension[]);
+	extensions?: Extension[] | ((host: ToolHost & { source(id: string): EntropiSource | undefined }) => Extension[]);
+	/** The external sources this process was given, by id, for tool sets that read or act on them. */
+	sources?: (id: string) => EntropiSource | undefined;
 	/** Pi's execution environment for a conversation (what the coding tools read, write and run in). None: those tools fail with an ordinary error. */
 	env?: (conversationId: unknown) => ExecutionEnv | undefined;
 	memory?: OptChat;
@@ -92,7 +94,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		const own = entropiExtension(host);
 		registry.install(own);
 		this.extByName.set(own.name, own);
-		for (const e of (typeof this.opts.extensions === "function" ? this.opts.extensions(host) : this.opts.extensions ?? [])) { registry.install(e); this.extByName.set(e.name, e); }
+		for (const e of (typeof this.opts.extensions === "function" ? this.opts.extensions({ ...host, source: this.opts.sources ?? (() => undefined) }) : this.opts.extensions ?? [])) { registry.install(e); this.extByName.set(e.name, e); }
 		this.harness = await Harness.open(this.storage, {
 			models: this.opts.inference.models, registry, env: ({ conversationId }: any) => this.opts.env?.(conversationId),
 			settings: { toolExecution: "parallel", retry: { maxRetries: 2 }, stream: { timeoutMs: 180_000 }, compaction: { enabled: true, keepRecentTokens: this.opts.keepRecentTokens ?? 20_000 }, ...this.opts.settings } as any,

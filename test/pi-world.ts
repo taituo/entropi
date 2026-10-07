@@ -6,6 +6,7 @@ import { PiRuntime } from "../src/adapters/pi/runtime.ts";
 import { buildInference, inferenceFromEnv } from "../src/adapters/pi/inference.ts";
 import { DispatchPump } from "../src/runtime/pump.ts";
 import { seedRealm } from "../src/seed.ts";
+import { demoRealm } from "../src/demo/realm.ts";
 import { PodmanSandbox } from "../src/adapters/sandbox/podman.ts";
 import { SandboxManager } from "../src/adapters/sandbox/manager.ts";
 import { sandboxEnvResolver } from "../src/adapters/sandbox/env.ts";
@@ -85,7 +86,7 @@ export function scriptedModel(gate = makeGate()) {
 export type World = Awaited<ReturnType<typeof makeWorld>>;
 export async function makeWorld(o: { sandboxDir?: string; dbPath: string; storage: Storage; real?: boolean; runtime?: Partial<ConstructorParameters<typeof PiRuntime>[0]> }) {
 	const core = new Core(openDb(o.dbPath));
-	seedRealm(core, "main");
+	seedRealm(core, demoRealm("main"));
 	core.addActor("main", { id: "human:anna", kind: "human", name: "Anna", roles: ["approver"] }, "system");
 	const gate = makeGate();
 	const faux = scriptedModel(gate);
