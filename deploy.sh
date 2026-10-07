@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 [ -f .deploy.env ] && . ./.deploy.env
 : "${BASE_DOMAIN:?set BASE_DOMAIN (copy .deploy.env.example to .deploy.env)}"
 export BASE_DOMAIN AUTH_MODE="${AUTH_MODE:-dev}"
-export LOCAL_LLM_BASE_URL="${LOCAL_LLM_BASE_URL:-}" LOCAL_LLM_MODEL="${LOCAL_LLM_MODEL:-}"
+export LOCAL_LLM_BASE_URL="${LOCAL_LLM_BASE_URL:-}" LOCAL_LLM_MODEL="${LOCAL_LLM_MODEL:-}" LOCAL_LLM_VISION_MODELS="${LOCAL_LLM_VISION_MODELS:-}"
 export AGENT_OPS_MODEL="${AGENT_OPS_MODEL:-}" AGENT_DEVELOPER_MODEL="${AGENT_DEVELOPER_MODEL:-}" AGENT_REVIEWER_MODEL="${AGENT_REVIEWER_MODEL:-}" AGENT_INSIGHT_MODEL="${AGENT_INSIGHT_MODEL:-}" OPTCHAT_MODEL="${OPTCHAT_MODEL:-}"
 STAMP=$(date +%Y%m%d-%H%M%S)
 export IMAGE="localhost/entropi:$STAMP" SANDBOX_IMAGE="localhost/entropi-sandbox:$STAMP"
@@ -34,6 +34,6 @@ if [ -n "${LOCAL_LLM_API_KEY_FILE:-}" ]; then
 fi
 
 echo "==> apply"
-envsubst '${BASE_DOMAIN} ${IMAGE} ${AUTH_MODE} ${SANDBOX_IMAGE} ${LOCAL_LLM_BASE_URL} ${LOCAL_LLM_MODEL} ${AGENT_OPS_MODEL} ${AGENT_DEVELOPER_MODEL} ${AGENT_REVIEWER_MODEL} ${AGENT_INSIGHT_MODEL} ${OPTCHAT_MODEL}' < k8s/entropi.yaml | kubectl apply -f - >/dev/null
+envsubst '${BASE_DOMAIN} ${IMAGE} ${AUTH_MODE} ${SANDBOX_IMAGE} ${LOCAL_LLM_BASE_URL} ${LOCAL_LLM_MODEL} ${LOCAL_LLM_VISION_MODELS} ${AGENT_OPS_MODEL} ${AGENT_DEVELOPER_MODEL} ${AGENT_REVIEWER_MODEL} ${AGENT_INSIGHT_MODEL} ${OPTCHAT_MODEL}' < k8s/entropi.yaml | kubectl apply -f - >/dev/null
 kubectl -n $NS rollout status deploy/entropi --timeout=180s
 echo; echo "Entropi: http://entropi.${BASE_DOMAIN}   (auth: $AUTH_MODE)"

@@ -41,6 +41,7 @@ spec:
             - { name: SANDBOX_IMAGE, value: "${SANDBOX_IMAGE}" }
             - { name: LOCAL_LLM_BASE_URL, value: "${LOCAL_LLM_BASE_URL}" }
             - { name: LOCAL_LLM_MODEL, value: "${LOCAL_LLM_MODEL}" }
+            - { name: LOCAL_LLM_VISION_MODELS, value: "${LOCAL_LLM_VISION_MODELS}" }
             - name: LOCAL_LLM_API_KEY
               valueFrom: { secretKeyRef: { name: entropi-inference, key: local-api-key, optional: true } }
             - { name: AGENT_OPS_MODEL, value: "${AGENT_OPS_MODEL}" }
