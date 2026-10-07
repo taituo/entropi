@@ -14,12 +14,14 @@ import { until } from "./pi-world.ts";
 
 type Seen = { headers: Record<string, string | string[] | undefined>; body: any };
 const seen: Seen[] = [];
-let mode: "ok" | "quota" = "ok";
+let mode: "ok" | "quota" | "flaky" = "ok";
+let flakyCalls = 0;
 const gw = createServer((req, res) => {
 	let raw = "";
 	req.on("data", (c) => (raw += c));
 	req.on("end", () => {
 		seen.push({ headers: req.headers, body: JSON.parse(raw || "{}") });
+		if (mode === "flaky" && flakyCalls++ === 0) return void res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "upstream overloaded, try again" } }));
 		if (mode === "quota") return void res.writeHead(429, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "monthly quota exceeded for this plan", type: "insufficient_quota" } }));
 		res.writeHead(200, { "content-type": "text/event-stream" });
 		const chunk = (delta: any, finish: string | null = null) => `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: seen.at(-1)!.body.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
@@ -109,5 +111,27 @@ test("a full quota is reported clearly to the people, nothing is dropped, and it
 	say(w.core, "@ops hello again");
 	await until(() => reply(w.core).filter((m) => m.status === "done").length === 2);
 	assert.equal(reply(w.core)[1].text, "seen");
+	await w.close();
+});
+
+test("the empty `error` assistant entry: a failed first attempt that Pi retries. It is recorded with its cause, and the answer is unaffected", async () => {
+	seen.length = 0; mode = "flaky"; flakyCalls = 0;
+	const w = await world({});
+	say(w.core, "@ops hello");
+	await until(() => reply(w.core).some((m) => m.status === "done"), 60_000);
+	const r = reply(w.core)[0];
+	assert.equal(r.text, "seen", "the retry answered");
+	const f = (r.meta.failures as any[]) ?? [];
+	assert.equal(f.length, 1, "exactly one failed attempt is on the record");
+	assert.equal(f[0].stopReason, "error");
+	assert.match(f[0].error, /overloaded|500/i, "with the gateway's own words");
+	assert.equal(seen.length, 2, "two requests: the failed one and the retry");
+	const { BACKGROUND_CONTEXT: ctx } = await import("@earendil-works/chord/context");
+	const conv = (await w.runtime.storage.scanConversations({}, 5, undefined, ctx)).items[0];
+	const entries = (await w.runtime.storage.scanEntries({ conversationId: conv.id }, 20, undefined, ctx)).items.filter((e) => e.kind === "pi.assistant");
+	const err = entries.find((e: any) => e.model?.[0]?.stopReason === "error") as any;
+	assert.ok(err, "Pi did write an assistant entry with stopReason error");
+	assert.deepEqual(err.model[0].content, [], "and it is empty, exactly as seen once in the live crash test");
+	mode = "ok";
 	await w.close();
 });
