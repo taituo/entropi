@@ -46,7 +46,7 @@ Lukujärjestys on ihmisen tarve → yhteinen työ → toteutuksen keinot. Rakent
 | CrewPi / Crew | Rakennetaan toimiva yhteinen työhuone: kanavat, agenttiroolit, hyväksynnät, repo, klusteri, sandbox, muisti ja workflowt. Käyttöliittymä osoittautuu onnistuneeksi. |
 | Ensimmäisen version kokemukset | Koko ketju toimii, mutta ympäristö, tunnistautuminen ja integraatiot pakkautuvat samaan sovellukseen. |
 | Swarm ja Unicorn | Halutaan saman yhteistyökerroksen alle myös kollektiivinen päättely ja kaupallisen harnessin itsenäinen suoritus. |
-| Entropi ja realm-ajattelu | Erotetaan yleinen työn, identiteetin, toimivallan, huomion ja päätösten ydin ympäristöistä. Temporal säilyy mahdollisena lisäosana. |
+| Entropi ja realm-ajattelu | Erotetaan yleinen työn, identiteetin, toimivallan, huomion ja päätösten ydin ympäristöistä. |
 | Ihmisen työympäristö | Fokus, zoom, Echo, hiljaiset agentit, multimodaalinen yhteistyö ja täysin muokattava nopea käyttöliittymä. |
 | Nykyinen Entropi | Core, Pi-adapteri, outbox, muistipuu, kuvat, stop, web-käyttöpinta ja sandbox-adapterit on rakennettu. Ulkoisten töiden yhdistäminen ja laajempi ihmisen huomionhallinta ovat vielä edessä. |
 
@@ -134,7 +134,6 @@ Täällä ovat työt, osallistujat, vastuut, päätökset ja yhteistyön sisält
 
 | Ominaisuus | Alkuperä | Tilanne |
 |---|---|---|
-| Valinnainen Temporal-lisäosa | O | Crewissä; nykyisestä Entropista puuttuu |
 | Agentit seuraavat ja ohjaavat olemassa olevia workflowta | O | Crewissä osittain; Entropissa lähdeperusta |
 | TR: triage → plan → implement → Gerrit WIP | O | Omistajan kuvattu työnkulku; ei nykyinen Entropi-ominaisuus |
 | Repo-, branch-, diff- ja review-työkalut | O, R | Crewissä |

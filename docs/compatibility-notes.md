@@ -15,7 +15,7 @@ Pi Pocketilla on oma `PocketApp`, HTTP-rajapinta, henkilöt, Durable-dokumentit 
 - Core-outbox ja Pi:n `requestId` yhdistävät viestin toimituksen idempotentisti. Vastauksen projektio käyttää omaa pysyvää avainta.
 - Pi-binding syntyy samassa Pi-commitissa kuin keskustelu. Sen indeksi luetaan uudelleen käynnistyksessä.
 - Sandbox on nyt Pi:n `ExecutionEnv`: built-in `CodingTools` käyttää Podman-/Kube-ympäristöä sen kautta.
-- Core-importtiraja sallii adapterit ilman Pi-riippuvuutta coressa. Aiempi koko sovellusta koskenut Temporal-kielto on poistunut.
+- Core-importtiraja sallii adapterit ilman Pi-riippuvuutta coressa.
 
 Lähteet: [binding](../src/adapters/pi/binding.ts), [runtime](../src/adapters/pi/runtime.ts), [pump](../src/runtime/pump.ts), [sandbox-env](../src/adapters/sandbox/env.ts), [rajatarkistus](../test/boundaries.test.ts).
 

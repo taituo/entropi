@@ -1,6 +1,6 @@
 # Entropi
 
-A strict, headless core for human + agent work. State lives in the core, never in a UI. Runs without Temporal.
+A strict, headless core for human + agent work. State lives in the core, never in a UI.
 
 ```
 src/core        domain + rules. Imports only itself and node:*. (enforced by test/boundaries.test.ts)
