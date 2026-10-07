@@ -20,6 +20,8 @@ export type PodmanOptions = {
 	memory?: string;
 	cpus?: string;
 	maxSeconds?: number;
+	/** Containers of this backend instance carry this extra label and `list` sees only them, so independent managers (tests, a second instance) never count or sweep each other's containers. */
+	pool?: string;
 };
 
 /**
@@ -29,7 +31,7 @@ export type PodmanOptions = {
  */
 export class PodmanSandbox implements SandboxBackend {
 	readonly name = "podman";
-	private o: Required<PodmanOptions>;
+	private o: Required<Omit<PodmanOptions, "pool">> & { pool?: string };
 	constructor(o: PodmanOptions) {
 		this.o = { network: "none", memory: "1g", cpus: "1", maxSeconds: 7200, ...o };
 	}
@@ -49,7 +51,7 @@ export class PodmanSandbox implements SandboxBackend {
 	/** The exact `podman run` arguments (exported so a test can check every isolation property). */
 	runArgs(a: { name: string; key: string; token: string; image: string }): string[] {
 		return [
-			"run", "-d", "--name", a.name, "--label", LABEL, "--label", `entropi.key=${a.key.slice(0, 60)}`,
+			"run", "-d", "--name", a.name, "--label", LABEL, "--label", `entropi.key=${a.key.slice(0, 60)}`, ...(this.o.pool ? ["--label", `entropi.pool=${this.o.pool}`] : []),
 			"--user", "10001:10001", "--read-only",
 			"--tmpfs", "/tmp:rw,size=256m,mode=1777", "--tmpfs", "/work:rw,size=1g,mode=0777",
 			"--cap-drop=ALL", "--security-opt", "no-new-privileges", "--pids-limit", "256", "--memory", this.o.memory, "--cpus", this.o.cpus,
@@ -79,13 +81,17 @@ export class PodmanSandbox implements SandboxBackend {
 		return { state: "failed", detail: `container is ${status} (exit ${exit})` };
 	}
 
+	/** Returns when the container is really gone: a heavily loaded host (or a container full of processes) can make one `rm` give up first. */
 	async remove(name: string) {
-		await run(["rm", "-f", "-t", "0", name], 30_000);
+		for (let attempt = 0; attempt < 4; attempt++) {
+			await run(["rm", "-f", "-t", "0", name], 30_000);
+			if ((await this.inspect(name)).state === "missing") break;
+		}
 		rmSync(this.socketDir(name), { recursive: true, force: true });
 	}
 
 	async list() {
-		const r = await run(["ps", "-a", "--filter", `label=${LABEL}`, "--format", "{{.Names}}"], 15_000);
+		const r = await run(["ps", "-a", "--filter", `label=${this.o.pool ? `entropi.pool=${this.o.pool}` : LABEL}`, "--format", "{{.Names}}"], 15_000);
 		return r.out.split("\n").map((s) => s.trim()).filter(Boolean);
 	}
 }

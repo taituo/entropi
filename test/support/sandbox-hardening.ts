@@ -17,7 +17,7 @@ const skip = have ? false : `needs podman and the image ${IMAGE}`;
 const key = () => `h${Date.now()}${Math.random().toString(36).slice(2, 6)}:space`;
 const sh = async (env: any, cmd: string, timeout = 20) => { let out = ""; const r = await env.exec(cmd, { timeout, onOutput: (t: string) => (out += t) }, ctx); return { code: r.ok ? r.value.exitCode : -1, out, error: r.ok ? undefined : r.error }; };
 const make = (o: { network?: "none" | "public" } = {}) => {
-	const backend = new PodmanSandbox({ dir: mkdtempSync(join(tmpdir(), "entropi-hard-")), ...o });
+	const backend = new PodmanSandbox({ dir: mkdtempSync(join(tmpdir(), "entropi-hard-")), pool: `h${process.pid}-${Math.random().toString(36).slice(2, 8)}`, ...o });
 	return { backend, m: new SandboxManager({ db: openDb(":memory:"), backend, image: IMAGE, max: 3 }) };
 };
 
@@ -89,8 +89,7 @@ test("hardening: a memory bomb and a fork bomb are contained, and the sandbox st
 		await sh(env, "bash -c ':(){ :|:& };:' 2>&1; sleep 1; echo survived", 30);
 		await new Promise((r) => setTimeout(r, 3000));
 		const after = await sh(env, "echo still-alive", 60);
-		assert.match(after.out, /still-alive/, "the sandbox answers after the abuse: a container with no process slots left is replaced");
-		assert.match(after.out, /restarted/, "and the output says what happened");
+		assert.match(after.out, /still-alive/, "the sandbox answers after the abuse (whether or not the bomb used up every process slot)");
 	} finally { await m.stop(k); }
 });
 
@@ -121,5 +120,24 @@ test("hardening: with the public network switched on, private ranges are still u
 		const env = sandboxEnvFor(m, k);
 		const r = await sh(env, "curl -sS -m 5 -o /dev/null -w '%{http_code}' https://example.com 2>&1");
 		assert.match(r.out, /200|301|302/, "public web works when asked for");
+	} finally { await m.stop(k); }
+});
+
+test("hardening: a sandbox with every process slot taken is replaced once, and the output says so", { skip, timeout: 180_000 }, async () => {
+	const { m } = make();
+	const k = key();
+	try {
+		const env = sandboxEnvFor(m, k);
+		// Deterministic: while this command is still running, 300 sleepers cannot all start under a limit of 256 processes.
+		const stopHolding = new AbortController();
+		let out = "", filled!: () => void;
+		const seen = new Promise<void>((r) => (filled = r));
+		const holding = env.exec("for i in $(seq 300); do sleep 600 >/dev/null 2>&1 & done; echo filled; sleep 40", { timeout: 60, onOutput: (t: string) => { out += t; if (out.includes("Resource temporarily unavailable")) filled(); } }, { ...ctx, abortSignal: stopHolding.signal } as any).catch(() => {}); // its container gets replaced under it: the call ends with a reset, which is expected
+		await seen; // the event we wait for: bash reports that it can no longer fork, so every slot is taken
+		const after = await sh(env, "echo still-alive", 60);
+		assert.match(after.out, /still-alive/);
+		assert.match(after.out, /restarted/, "the output says the sandbox was replaced");
+		stopHolding.abort(); // its container is gone; let go of the call
+		await holding;
 	} finally { await m.stop(k); }
 });

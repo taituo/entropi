@@ -119,7 +119,7 @@ test("runner + env: Pi's own env behind a socket: files, streamed output, timeou
 function manager(extra: { max?: number; idleMin?: number; dir?: string; db?: ReturnType<typeof openDb> } = {}) {
 	const dir = extra.dir ?? mkdtempSync(join(tmpdir(), "entropi-sbx-"));
 	const db = extra.db ?? openDb(":memory:");
-	const backend = new PodmanSandbox({ dir });
+	const backend = new PodmanSandbox({ dir, pool: `t${dir.split("/").pop()}` }); // one pool per data directory: a "restarted server" on the same directory sees its own containers
 	return { m: new SandboxManager({ db, backend, image: IMAGE, max: extra.max ?? 3, idleMin: extra.idleMin }), backend, dir, db };
 }
 const key = () => `t${Date.now()}${Math.random().toString(36).slice(2, 6)}:space`;
