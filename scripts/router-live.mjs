@@ -50,6 +50,11 @@ function lacksContext(text) {
 }
 
 const keyPath = join(homedir(), "openrouter20usd.key");
+// experimental: the live eval stays off unless the flag arms it (npm test never reaches the key file).
+if (process.env.ENTROPI_EXPERIMENTAL_ROUTER !== "1") {
+	console.log("SKIP: experimental router is off (set ENTROPI_EXPERIMENTAL_ROUTER=1 to run the live router eval; npm test stays offline)");
+	process.exit(0);
+}
 if (!existsSync(keyPath)) {
 	console.log("SKIP: no key file at ~/openrouter20usd.key (live router eval needs it; npm test stays offline)");
 	process.exit(0);

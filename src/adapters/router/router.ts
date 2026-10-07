@@ -1,3 +1,4 @@
+// experimental: front desk router pipeline (off unless ENTROPI_EXPERIMENTAL_ROUTER=1).
 import { handleOf, type Core } from "../../core/core.ts";
 import type { AgentDesc, Classifier, Clarifier } from "./ports.ts";
 import type { FeedbackStore } from "./feedback.ts";

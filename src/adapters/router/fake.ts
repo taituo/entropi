@@ -1,3 +1,4 @@
+// experimental: front desk router Fake (off unless ENTROPI_EXPERIMENTAL_ROUTER=1).
 import type { AgentDesc, Classification, Clarifier, Classifier, ClarifyResult } from "./ports.ts";
 import { isSmallTalk } from "./router.ts";
 

@@ -1,3 +1,4 @@
+// experimental: front desk router OpenRouter backend (off unless ENTROPI_EXPERIMENTAL_ROUTER=1).
 import type { AgentDesc, Classification, Clarifier, Classifier, ClarifyResult } from "./ports.ts";
 
 /**

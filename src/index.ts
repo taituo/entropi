@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 export * from "./core/index.ts";
 export { createEntropi } from "./entropi.ts";
-export type { Dispatcher, DispatcherContext, Entropi, EntropiOptions, PiOptions, SourceBinding } from "./entropi.ts";
+export type { Dispatcher, DispatcherContext, Entropi, EntropiOptions, PiOptions, RouterOptions, SourceBinding } from "./entropi.ts";
 export { seedRealm } from "./seed.ts";
 export type { AgentSeed, RealmSeed, SpaceSeed } from "./seed.ts";
 /** The version of this package (semver). */

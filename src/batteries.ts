@@ -15,6 +15,7 @@ export { FakeWorld } from "./adapters/fake-world/world.ts";
 export { OptChat, openMemoryDb } from "./memory/optchat.ts";
 // Front desk / router: the opinionated receiver channel (batteries side; the core stays free of opinions).
 export { FrontDesk, ROUTER_AGENTS, DEFAULT_THRESHOLD, formatNotice, lacksContext, parseCorrection, isSmallTalk } from "./adapters/router/router.ts";
+export { ROUTER_FLAG, isRouterEnabled } from "./adapters/router/flag.ts";
 export type { RouteOutcome, FrontDeskOptions } from "./adapters/router/router.ts";
 export type { AgentDesc, Classification, Classifier, Clarifier, ClarifyResult } from "./adapters/router/ports.ts";
 export { FakeClassifier, FakeClarifier, fakeScores } from "./adapters/router/fake.ts";

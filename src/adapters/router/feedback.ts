@@ -1,3 +1,4 @@
+// experimental: front desk router teaching-data store (off unless ENTROPI_EXPERIMENTAL_ROUTER=1).
 /**
  * Routing corrections ("ei, developer") as teaching/measurement data. The core stays out of it: corrections are
  * not domain facts, so they live in the adapter's own store (memory for tests, a JSONL file in production),

@@ -10,6 +10,9 @@ import type { AgentControl, AgentDispatcher, EntropiSource, SourceEvent } from "
 import type { ExternalRef, Id, Message } from "./core/types.ts";
 import { PiRuntime } from "./adapters/pi/runtime.ts";
 import type { ToolHost } from "./adapters/pi/tools.ts";
+import { FrontDesk } from "./adapters/router/router.ts";
+import type { Classifier, Clarifier } from "./adapters/router/ports.ts";
+import { isRouterEnabled } from "./adapters/router/flag.ts";
 import { buildInference, type Inference, type InferenceConfig, type ModelRef } from "./adapters/pi/inference.ts";
 import { inCluster, KubeSandbox } from "./adapters/sandbox/kube.ts";
 import { SandboxManager } from "./adapters/sandbox/manager.ts";
@@ -41,6 +44,21 @@ export type PiOptions = {
 	settings?: Record<string, unknown>;
 };
 
+/** Experimental front desk router (default off). Active only when the option is given AND the
+ * ENTROPI_EXPERIMENTAL_ROUTER=1 flag arms it (`enabled: true` also arms it; `enabled: false` wins over
+ * the flag); without activation nothing classifies, calls a model or needs a key. The core is untouched. */
+export type RouterOptions = {
+	/** Arms the router alongside the flag; false forces it off. Default: the flag alone decides. */
+	enabled?: boolean;
+	/** The classifier behind the front desk (a Fake for tests, OpenRouter or Jev/openjev live). */
+	classifier: Classifier;
+	clarifier?: Clarifier;
+	/** The channel where people write without @-mentions. */
+	spaceId: string;
+	/** Route at or above this confidence (default 0.7); below it a human picks. */
+	threshold?: number;
+};
+
 export type EntropiOptions = {
 	/** Where everything durable lives: the core's database, Pi's storage, memory, uploads, sandbox registry. */
 	dataDir: string;
@@ -50,6 +68,8 @@ export type EntropiOptions = {
 	config?: DeepPartial<Omit<Config, "dataDir" | "defaultRealm">>;
 	/** The bundled agent runtime on Pi Durable. Leave it out and give `dispatcher` instead, or neither: messages then wait in the outbox. */
 	pi?: PiOptions;
+	/** Experimental front desk (default off; see RouterOptions). Absent unless armed. */
+	router?: RouterOptions;
 	/** Your own agent runtime instead of Pi. */
 	dispatcher?: (ctx: DispatcherContext) => Dispatcher | Promise<Dispatcher>;
 	/** External systems. Their state changes are cached on linked refs; tools reach them through `pi.extensions`' `host.source(id)`. */
@@ -66,6 +86,8 @@ export type Entropi = {
 	app: App;
 	/** The Pi runtime, when `pi` was given. */
 	runtime?: PiRuntime;
+	/** The experimental front desk, when `router` was given and armed. Undefined by default. */
+	router?: FrontDesk;
 	sandboxes?: SandboxManager;
 	/** Listen on a port (0 = any free one) and resolve with the port actually used. */
 	listen(port: number): Promise<number>;
@@ -115,8 +137,11 @@ export async function createEntropi(o: EntropiOptions): Promise<Entropi> {
 	}
 
 	const memory = new OptChat(openMemoryDb(join(o.dataDir, "memory.sqlite")));
-	let runtime: PiRuntime | undefined;
-	if (o.pi && o.dispatcher) throw new Error("give either pi or dispatcher, not both");
+	// Experimental front desk: built only when armed (option + flag), otherwise absent entirely.
+	const router = o.router && o.router.enabled !== false && (o.router.enabled === true || isRouterEnabled())
+		? new FrontDesk({ core, realmId: o.realm.id, spaceId: o.router.spaceId, classifier: o.router.classifier, clarifier: o.router.clarifier, threshold: o.router.threshold })
+		: undefined;
+	let runtime: PiRuntime | undefined;	if (o.pi && o.dispatcher) throw new Error("give either pi or dispatcher, not both");
 	if (o.pi) {
 		const p = o.pi;
 		runtime = new PiRuntime({
@@ -140,7 +165,7 @@ export async function createEntropi(o: EntropiOptions): Promise<Entropi> {
 
 	let closed: Promise<void> | undefined;
 	return {
-		core, app, runtime, sandboxes,
+		core, app, runtime, sandboxes, router,
 		listen: (port) => new Promise((resolve, reject) => { app.server.once("error", reject); app.server.listen(port, () => resolve((app.server.address() as { port: number }).port)); }),
 		close: () => (closed ??= (async () => {
 			clearInterval(timer);

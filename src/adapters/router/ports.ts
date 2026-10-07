@@ -1,3 +1,4 @@
+// experimental: front desk router ports (off unless ENTROPI_EXPERIMENTAL_ROUTER=1).
 /**
  * Router ports: the two model seams of the front desk, as interfaces. The core stays free of opinions: it never
  * imports these, and the router adapter speaks to the core only through actor-checked operations. Any model

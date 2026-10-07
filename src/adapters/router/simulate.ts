@@ -1,3 +1,4 @@
+// experimental: front desk router simulation harness (off unless ENTROPI_EXPERIMENTAL_ROUTER=1).
 import type { AgentDesc, Classifier } from "./ports.ts";
 
 /**

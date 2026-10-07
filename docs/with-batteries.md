@@ -18,6 +18,10 @@ In k3s: copy `.deploy.env.example` to `.deploy.env`, set `BASE_DOMAIN` and the m
 
 **Auth:** dev login in the demo; for real use, the trusted-proxy header with an authenticating proxy in front (oauth2-proxy plus any OIDC provider, Authelia, Authentik, Dex, Zitadel, Tailscale serve identity headers on a tailnet, or Keycloak as one option). Entropi has no login of its own ([steering.md](steering.md)).
 
+## Front desk (experimental)
+
+The @-less receiver channel (`src/adapters/router`: classifier/clarifier ports, Fake and OpenRouter backends, the `FrontDesk` cascade, offline sims in `test/router*.test.ts`, live eval via `npm run test:router-live`) stays fully off by default and activates only with `ENTROPI_EXPERIMENTAL_ROUTER=1` (plus `createEntropi({ router: { classifier, spaceId } })`), so without the flag nothing calls a model or needs a key.
+
 ## Swapping parts
 
 Drop or replace any battery by implementing its port. The core never imports an adapter, and adapters never import each other (`test/boundaries.test.ts`). No runtime: the API and UI show only the abilities the runtime has. `SANDBOX_BACKEND=none`: agents get no coding tools. Another model: any OpenAI-compatible URL, per agent with `AGENT_<HANDLE>_MODEL`. A real outside system: write an `EntropiSource` (`observe`, `query`, `invoke`); the fake cluster shows the shape.
