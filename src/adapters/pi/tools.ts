@@ -82,7 +82,7 @@ export function entropiExtension(host: ToolHost) {
 
 	const requestApproval = defineTool({
 		name: "request_approval",
-		description: "Ask the humans in this space to approve an action BEFORE you do it. Blocks until someone with the approver role decides. Only for actions you will then perform yourself. Never use it to request permissions or access you lack: tell the humans plainly what is blocked instead.",
+		description: "Ask the humans in this space to approve an action BEFORE you do it. Blocks until someone with the approver role decides. Only for actions you will then perform yourself, and never before a tool that asks for approval by itself (such as k8s_apply_configmap): call that tool directly. Never use it to request permissions or access you lack: tell the humans plainly what is blocked instead.",
 		parameters: Type.Object({
 			action: Type.String({ description: "What will be done, one line" }),
 			target: Type.String({ description: "System or object affected" }),

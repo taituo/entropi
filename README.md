@@ -32,6 +32,8 @@ AIRGAPPED=true LOCAL_LLM_BASE_URL=... LOCAL_LLM_MODEL=... npm run demo
 
 `AIRGAPPED=true` switches cloud providers off and forces the sandbox to have no network. With rootless podman (or a Kubernetes namespace, see `k8s/`) the developer and reviewer agents get Pi's `read`/`write`/`edit`/`bash` tools inside an isolated container; without one they get no sandbox tools.
 
+The core is free of opinions; "with batteries" is the one opinionated assembly that works right away (Pi Durable agents, Pi-env sandbox, OptChat memory, the UI, a local model, proxy auth). What it contains, how to swap parts out and what production still needs: [docs/with-batteries.md](docs/with-batteries.md).
+
 ## Status
 
 Done: realms, actors and roles, spaces and messages, work, decisions with separation of duties, attention, event log; HTTP + SSE and a Preact UI (phone width too); Pi Durable runtime with crash-safe hand-over (tested with real SIGKILLs); steering and stopping agents; sandbox via Pi's execution environment; OptChat memory tree with an agent `memory_zoom` tool; a first external source (a fake cluster) with read tools and an approval-gated change tool; auth through a trusted proxy header or dev login.

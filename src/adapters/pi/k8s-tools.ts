@@ -87,7 +87,7 @@ export function k8sExtension(host: ToolHost & { source(): EntropiSource | undefi
 	});
 	const apply = defineTool({
 		name: "k8s_apply_configmap",
-		description: "Change values of a ConfigMap, optionally restarting a deployment afterwards so it picks them up. A human must approve; the approval card shows the exact before/after values. Blocks until decided.",
+		description: "Change values of a ConfigMap, optionally restarting a deployment afterwards so it picks them up. A human must approve; the approval card shows the exact before/after values. Asks the approval itself: do not call request_approval first. Blocks until decided.",
 		parameters: Type.Object({
 			namespace: ns, name: Type.String({ description: "ConfigMap name" }),
 			data: Type.Record(Type.String(), Type.String(), { description: "Keys to set, e.g. { \"POOL_SIZE\": \"10\" }" }),

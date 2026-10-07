@@ -60,7 +60,7 @@ export class KubeSandbox implements SandboxBackend {
 	readonly name = "kube";
 	private ns: string;
 	constructor(o: { namespace?: string } = {}) {
-		this.ns = o.namespace ?? "ai-sandboxes";
+		this.ns = o.namespace ?? "entropi-sandboxes";
 	}
 	async start(a: { name: string; key: string; token: string; image: string }) {
 		await kube("POST", `/api/v1/namespaces/${this.ns}/pods`, podSpec({ ...a, namespace: this.ns }));

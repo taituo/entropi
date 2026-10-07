@@ -35,7 +35,7 @@ test("podman run arguments carry every isolation property, and the default is NO
 });
 
 test("pod spec carries every isolation property we rely on (Crewpi's, unchanged in substance)", () => {
-	const p: any = podSpec({ name: sandboxName("incidents"), key: "incidents", token: "t".repeat(32), image: "img:1", namespace: "ai-sandboxes" });
+	const p: any = podSpec({ name: sandboxName("incidents"), key: "incidents", token: "t".repeat(32), image: "img:1", namespace: "entropi-sandboxes" });
 	const c = p.spec.containers[0];
 	assert.equal(p.spec.automountServiceAccountToken, false, "no Kubernetes credentials inside");
 	assert.equal(p.spec.securityContext.runAsNonRoot, true);

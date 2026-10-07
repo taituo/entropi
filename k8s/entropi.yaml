@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: entropi
+  labels: { app.kubernetes.io/part-of: entropi }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: entropi, namespace: entropi }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: entropi-data, namespace: entropi }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 2Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: entropi, namespace: entropi, labels: { app: entropi } }
+spec:
+  replicas: 1 # one process owns the SQLite files
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: entropi } }
+  template:
+    metadata: { labels: { app: entropi } }
+    spec:
+      serviceAccountName: entropi
+      securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 }
+      containers:
+        - name: entropi
+          image: ${IMAGE}
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: PUBLIC_URL, value: "http://entropi.${BASE_DOMAIN}" }
+            - { name: AUTH_MODE, value: "${AUTH_MODE}" }
+            - name: SESSION_SECRET
+              valueFrom: { secretKeyRef: { name: entropi-secrets, key: session-secret } }
+            - { name: SANDBOX_BACKEND, value: "kube" }
+            - { name: SANDBOX_NAMESPACE, value: "entropi-sandboxes" }
+            - { name: SANDBOX_IMAGE, value: "${SANDBOX_IMAGE}" }
+            - { name: LOCAL_LLM_BASE_URL, value: "${LOCAL_LLM_BASE_URL}" }
+            - { name: LOCAL_LLM_MODEL, value: "${LOCAL_LLM_MODEL}" }
+            - name: LOCAL_LLM_API_KEY
+              valueFrom: { secretKeyRef: { name: entropi-inference, key: local-api-key, optional: true } }
+            - { name: AGENT_OPS_MODEL, value: "${AGENT_OPS_MODEL}" }
+            - { name: AGENT_DEVELOPER_MODEL, value: "${AGENT_DEVELOPER_MODEL}" }
+            - { name: AGENT_REVIEWER_MODEL, value: "${AGENT_REVIEWER_MODEL}" }
+            - { name: AGENT_INSIGHT_MODEL, value: "${AGENT_INSIGHT_MODEL}" }
+            - { name: OPTCHAT_MODEL, value: "${OPTCHAT_MODEL}" }
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 20, failureThreshold: 6 }
+          resources:
+            requests: { cpu: 100m, memory: 160Mi }
+            limits: { memory: 1Gi }
+          volumeMounts: [{ name: data, mountPath: /data }]
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: entropi-data }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: entropi, namespace: entropi }
+spec:
+  selector: { app: entropi }
+  ports: [{ port: 80, targetPort: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: entropi
+  namespace: entropi
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - host: entropi.${BASE_DOMAIN}
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: entropi, port: { number: 80 } } } }

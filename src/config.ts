@@ -40,6 +40,6 @@ export const sandboxConfig = {
 	network: (env.AIRGAPPED === "true" ? "none" : (env.SANDBOX_NETWORK ?? "none")) as "none" | "public",
 	max: num(env.SANDBOX_MAX, 2),
 	idleMin: num(env.SANDBOX_IDLE_MIN, 30),
-	namespace: env.SANDBOX_NAMESPACE ?? "ai-sandboxes",
+	namespace: env.SANDBOX_NAMESPACE ?? "entropi-sandboxes",
 };
 export type Config = typeof config;
