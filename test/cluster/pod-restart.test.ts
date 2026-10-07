@@ -44,6 +44,7 @@ test("pod restart while an approval is pending: still one card, the verdict stil
 	const space = "incidents";
 	const beforeIds = new Set((await t.call(t.users.approver!, "GET", "/decisions")).body.decisions.map((d: any) => d.id));
 	const marker = `restart-${Date.now().toString(36)}`;
+	const lastId = Math.max(0, ...(await agentMsgs(space)).map((m: any) => m.id));
 	await t.call(t.users.operator!, "POST", `/spaces/${space}/messages`, { text: `@ops Call the request_approval tool exactly once with action "${marker}", target "test", reason "restart test". After the verdict, say the word DONE and the verdict.` });
 	const card = await until(async () => (await t.call(t.users.approver!, "GET", "/decisions")).body.decisions.find((d: any) => !beforeIds.has(d.id) && JSON.stringify(d).includes(marker)), 120_000, "the approval card");
 	killPod();
@@ -58,7 +59,7 @@ test("pod restart while an approval is pending: still one card, the verdict stil
 	assert.equal((await t.call(t.users.approver!, "GET", "/decisions")).body.decisions.filter((d: any) => JSON.stringify(d).includes(marker)).length, 1, "the replay did not ask again");
 	assert.equal((await t.call(t.users.approver!, "POST", `/decisions/${card.id}/decide`, { answer: "approve", note: "after restart" })).status, 200);
 	const fin = await until(async () => {
-		const ms = (await agentMsgs(space)).filter((m: any) => /DONE/.test(m.text) && m.status === "done" && m.createdAt >= card.createdAt);
+		const ms = (await agentMsgs(space)).filter((m: any) => /DONE/.test(m.text) && m.status === "done" && m.id > lastId);
 		return ms.length ? ms : undefined;
 	}, 180_000, "the agent to finish with the verdict");
 	assert.ok(fin.length >= 1);

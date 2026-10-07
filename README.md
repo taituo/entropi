@@ -57,10 +57,11 @@ Adapters only talk to the core through its ports and never import each other; `t
 ## Tests
 
 ```sh
-npm test            # offline, deterministic (scripted model); includes SIGKILL crash tests
+npm test               # offline and deterministic (scripted model): rights matrix, privacy, SSE, races, SIGKILL crash matrix, input hardening, OptChat, sandbox (podman if present)
 npm run typecheck
-npm run test:live   # needs LOCAL_LLM_BASE_URL / LOCAL_LLM_MODEL; podman for the sandbox tests
-scripts/ui-check.sh # browser check in a Playwright container (podman)
+npm run test:ui        # browser smoke test against a fresh local demo (podman, Playwright container)
+npm run test:cluster   # the API suites, pod-restart tests and browser smoke test against a deployment (ENTROPI_URL or .deploy.env; kubectl; real model)
+npm run test:live      # real-model tests: needs LOCAL_LLM_BASE_URL / LOCAL_LLM_MODEL
 ```
 
 MIT licensed.
