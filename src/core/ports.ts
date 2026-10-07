@@ -7,14 +7,20 @@ import type { Id } from "./types.ts";
 
 /** An external system that owns operational truth (workflow engine, review system, CI, cluster, session harness). */
 export type SourceEvent = { workRef: { source: string; externalId: string }; state: string; at?: number; data?: Record<string, unknown> };
+/** Identifies one intended effect, derived from something durable (a decision id, a runtime task id), so a replay repeats the key. */
+export type InvokeContext = { idempotencyKey: string };
 export interface EntropiSource {
 	readonly id: string;
 	/** Changes of things this source owns. Entropi caches the state and keeps the reference; the source stays authoritative. */
 	observe(signal: AbortSignal): AsyncIterable<SourceEvent>;
 	/** Read one external object (or a collection) on demand: `externalId` names it in the source's own scheme, `args` narrows it. */
 	query?(externalId: string, args?: Record<string, unknown>): Promise<{ state: string; data?: any }>;
-	/** Act on the external system. Called only after the core's policy and decision checks passed. Must be idempotent per `input`. */
-	invoke?(action: string, input: any): Promise<unknown>;
+	/**
+	 * Act on the external system. Called only after the core's policy and decision checks passed. External effects are outside any
+	 * runtime's replay protection, so the key is the only guard: the same `idempotencyKey` must never execute twice. A repeated
+	 * call returns what the first one returned.
+	 */
+	invoke?(action: string, input: any, ctx: InvokeContext): Promise<unknown>;
 }
 
 /** One transcript entry of an agent runtime, reduced to what memory needs. */

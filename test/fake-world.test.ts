@@ -23,14 +23,33 @@ test("source port: state changes come out of observe, reads through query, chang
 	assert.match((await w.query("logs/demo-apps/" + pods.data[0].name, { previous: true }) as any).data.lines.join(), /POOL_SIZE=0/);
 	await assert.rejects(w.query("configmap/kube-system/x"), /no such namespace/);
 	// a config change alone does not heal the pods; the restart does, and a repeated restart announces nothing new
-	await w.invoke("apply-configmap", { namespace: "demo-apps", name: "checkout-config", data: { POOL_SIZE: "10" } });
+	await w.invoke("apply-configmap", { namespace: "demo-apps", name: "checkout-config", data: { POOL_SIZE: "10" } }, { idempotencyKey: "k1" });
 	assert.equal((await w.query("deployment/demo-apps/checkout-api")).state, "unhealthy");
-	await w.invoke("restart-deployment", { namespace: "demo-apps", name: "checkout-api", at: "t1" });
-	await w.invoke("restart-deployment", { namespace: "demo-apps", name: "checkout-api", at: "t1" });
+	await w.invoke("restart-deployment", { namespace: "demo-apps", name: "checkout-api" }, { idempotencyKey: "k2" });
+	await w.invoke("restart-deployment", { namespace: "demo-apps", name: "checkout-api" }, { idempotencyKey: "k2" });
 	await until(() => c.got.length === 3);
 	assert.deepEqual([c.got[2].workRef.externalId, c.got[2].state], ["deployment/demo-apps/checkout-api", "healthy"]);
 	assert.equal(c.got.length, 3);
 	await c.stop();
+});
+
+test("idempotency: a repeated key executes nothing and returns the first result; a new key is a new effect; no key is refused", async () => {
+	const w = new FakeWorld();
+	const pods = async () => ((await w.query("pods/demo-apps")) as any).data.map((p: any) => p.name).join();
+	const first = await w.invoke("apply-configmap", { namespace: "demo-apps", name: "checkout-config", data: { POOL_SIZE: "10" } }, { idempotencyKey: "a" });
+	await w.invoke("restart-deployment", { namespace: "demo-apps", name: "checkout-api" }, { idempotencyKey: "r1" });
+	const afterFirst = await pods();
+	assert.equal(w.executed, 2);
+	// the same keys again, as a replay after a crash would send them, even after the world moved on
+	await w.invoke("apply-configmap", { namespace: "demo-apps", name: "checkout-config", data: { POOL_SIZE: "99" } }, { idempotencyKey: "a" }).then((r) => assert.deepEqual(r, first, "the first result comes back"));
+	await w.invoke("restart-deployment", { namespace: "demo-apps", name: "checkout-api" }, { idempotencyKey: "r1" });
+	assert.equal(w.executed, 2, "nothing ran twice");
+	assert.equal(await pods(), afterFirst, "no second rollout: the pods are the same");
+	assert.equal(((await w.query("configmap/demo-apps/checkout-config")) as any).data.POOL_SIZE, "10", "the replayed apply did not overwrite");
+	await w.invoke("restart-deployment", { namespace: "demo-apps", name: "checkout-api" }, { idempotencyKey: "r2" });
+	assert.equal(w.executed, 3, "a different key is a different effect");
+	assert.notEqual(await pods(), afterFirst);
+	await assert.rejects(w.invoke("restart-deployment", { namespace: "demo-apps", name: "checkout-api" }, {} as any), /idempotency key/);
 });
 
 test("the bridge caches observed state on linked refs and reports unlinked changes to policy; it decides nothing itself", async () => {
@@ -44,8 +63,8 @@ test("the bridge caches observed state on linked refs and reports unlinked chang
 	assert.equal(core.getRef("main", "k8s", "deployment/demo-apps/checkout-api")!.state, "unhealthy");
 	assert.deepEqual(unlinked, ["deployment/demo-apps/orders-api"]);
 	assert.equal(core.getWork("main", "w1")!.state, "working", "the bridge changes no work state");
-	await world.invoke("apply-configmap", { namespace: "demo-apps", name: "checkout-config", data: { POOL_SIZE: "10" } });
-	await world.invoke("restart-deployment", { namespace: "demo-apps", name: "checkout-api", at: "t1" });
+	await world.invoke("apply-configmap", { namespace: "demo-apps", name: "checkout-config", data: { POOL_SIZE: "10" } }, { idempotencyKey: "k1" });
+	await world.invoke("restart-deployment", { namespace: "demo-apps", name: "checkout-api" }, { idempotencyKey: "k2" });
 	await until(() => changes.length === 2);
 	assert.equal(core.getRef("main", "k8s", "deployment/demo-apps/checkout-api")!.state, "healthy");
 	b.stop(); await b.done;
@@ -53,7 +72,9 @@ test("the bridge caches observed state on linked refs and reports unlinked chang
 
 test("ops reads the cluster, asks a human before changing it, and sees the fix take effect", async () => {
 	const world = new FakeWorld();
-	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage(), runtime: { extensions: (host: any) => [k8sExtension({ ...host, source: () => world, readNamespaces: ["demo-apps"], writeNamespaces: ["demo-apps"] })] } });
+	const calls: { action: string; key: string }[] = [];
+	const spy: typeof world = Object.assign(Object.create(world), { invoke: (a: string, i: any, c: any) => (calls.push({ action: a, key: c.idempotencyKey }), world.invoke(a, i, c)) });
+	const w = await makeWorld({ dbPath: ":memory:", storage: new MemoryStorage(), runtime: { extensions: (host: any) => [k8sExtension({ ...host, source: () => spy, readNamespaces: ["demo-apps"], writeNamespaces: ["demo-apps"] })] } });
 	await w.start();
 	w.core.postMessage("main", "incidents", "human:anna", { text: "@ops k8sfix checkout", dispatchTo: ["agent:ops"] });
 	await until(() => w.core.openDecisions("main").length === 1);
@@ -65,6 +86,8 @@ test("ops reads the cluster, asks a human before changing it, and sees the fix t
 	await until(() => reply().status === "done");
 	assert.equal((await world.query("deployment/demo-apps/checkout-api")).state, "healthy");
 	assert.match(reply().text, /checkout-api-\S+ 1\/1 Running restarts=0/, "the agent's last look at the cluster shows the fix");
+	assert.deepEqual(calls.map((c) => c.action), ["apply-configmap", "restart-deployment"]);
+	assert.deepEqual(calls.map((c) => c.key), [`decision:${card.id}:apply`, `decision:${card.id}:restart`], "the keys come from the decision id, so a rerun of the task repeats them");
 	assert.deepEqual((reply().meta.activity as any[]).map((a: any) => a.name), ["k8s_pods", "k8s_apply_configmap", "k8s_pods"]);
 	await w.close();
 });

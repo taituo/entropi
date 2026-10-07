@@ -94,7 +94,7 @@ export function k8sExtension(host: ToolHost & { source(): EntropiSource | undefi
 			restart: Type.Optional(Type.String({ description: "Deployment to restart after applying" })),
 			reason: Type.String({ description: "Why, with the evidence you saw" }),
 		}),
-		replay: "safe", // approval is keyed by the task id and the changes are a merge patch: a rerun after a crash cannot apply twice
+		replay: "safe", // approval is keyed by the task id and every effect carries an idempotency key from the decision id: a rerun after a crash cannot apply twice
 		execute: async (args, api, context) => {
 			try {
 				writable(args.namespace); name("configmap", args.name); if (args.restart) name("deployment", args.restart);
@@ -108,11 +108,12 @@ export function k8sExtension(host: ToolHost & { source(): EntropiSource | undefi
 					details: { target: `${args.namespace}/${args.name}`, restart: args.restart ?? null, reason: args.reason, changes },
 				});
 				if (!v.approved) return text(v.text);
-				await s.invoke("apply-configmap", { namespace: args.namespace, name: args.name, data: args.data });
+				// The decision id is the same on every rerun of this task, so a replay after a crash repeats the keys and the source does nothing twice.
+				const key = `decision:${v.decision.id}`;
+				await s.invoke("apply-configmap", { namespace: args.namespace, name: args.name, data: args.data }, { idempotencyKey: `${key}:apply` });
 				let restarted = "";
 				if (args.restart) {
-					const at = await api.memo<string>("restart-at", new Date().toISOString(), context); // the same marker on a rerun: restarting is idempotent
-					await s.invoke("restart-deployment", { namespace: args.namespace, name: args.restart, at });
+					await s.invoke("restart-deployment", { namespace: args.namespace, name: args.restart }, { idempotencyKey: `${key}:restart` });
 					restarted = ` Restarted deployment ${args.restart}.`;
 				}
 				const loc = host.locate(api.conversationId);

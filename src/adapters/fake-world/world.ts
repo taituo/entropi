@@ -1,4 +1,4 @@
-import type { EntropiSource, SourceEvent } from "../../core/ports.ts";
+import type { EntropiSource, InvokeContext, SourceEvent } from "../../core/ports.ts";
 
 /**
  * A small, deterministic fake cluster for demos and tests (Crewpi's demo story, without needing a cluster): in the namespace
@@ -21,6 +21,11 @@ export class FakeWorld implements EntropiSource {
 	private lastState = new Map<string, string>();
 	private queue: SourceEvent[] = [];
 	private wake?: () => void;
+	/** Results by idempotency key: a repeated key returns the first result and executes nothing. */
+	private done = new Map<string, unknown>();
+	/** How many effects actually ran (not counting repeats), for tests. */
+	executed = 0;
+	private restarts = 0;
 
 	constructor(o: { now?: () => number } = {}) {
 		this.now = o.now ?? Date.now;
@@ -40,6 +45,7 @@ export class FakeWorld implements EntropiSource {
 			["orders-api", { name: "orders-api", image: "docker.io/library/busybox:1.37", replicas: 2, configMaps: ["orders-config"], env: { WORKERS: "4", REGION: "eu-north-1" }, restartedAt: null, rolloutAt: this.startedAt - 600 * MIN }],
 		]);
 		this.lastState.clear();
+		this.done.clear();
 		for (const d of this.deployments.keys()) this.publish(d);
 	}
 
@@ -100,19 +106,29 @@ export class FakeWorld implements EntropiSource {
 		}
 	}
 
-	async invoke(action: string, input: any) {
+	async invoke(action: string, input: any, ctx: InvokeContext) {
+		if (!ctx?.idempotencyKey) throw new Error("invoke needs an idempotency key");
+		const key = `${action}:${ctx.idempotencyKey}`;
+		if (this.done.has(key)) return this.done.get(key);
+		const result = this.run(action, input);
+		this.done.set(key, result);
+		this.executed++;
+		return result;
+	}
+
+	private run(action: string, input: any) {
 		if (input?.namespace !== this.ns) throw new Error(`no such namespace "${input?.namespace}"`);
 		if (action === "apply-configmap") {
 			const c = this.configMaps.get(input.name);
 			if (!c) throw new Error(`configmap "${input.name}" not found`);
 			const changed = Object.entries(input.data as Record<string, string>).filter(([k, v]) => c.data[k] !== v).map(([k, v]) => ({ key: k, from: c.data[k] ?? null, to: v }));
-			Object.assign(c.data, input.data); // a merge patch: applying the same thing twice changes nothing the second time
+			Object.assign(c.data, input.data);
 			return { changed };
 		}
 		if (action === "restart-deployment") {
 			const d = this.deployments.get(input.name);
 			if (!d) throw new Error(`deployment "${input.name}" not found`);
-			if (d.restartedAt !== String(input.at)) { d.restartedAt = String(input.at); d.rolloutAt = this.now(); d.env = Object.assign({}, ...d.configMaps.map((c) => this.configMaps.get(c)?.data)); } // idempotent per restart marker
+			d.restartedAt = `r${++this.restarts}`; d.rolloutAt = this.now(); d.env = Object.assign({}, ...d.configMaps.map((c) => this.configMaps.get(c)?.data));
 			this.publish(d.name);
 			return { restarted: d.name };
 		}
