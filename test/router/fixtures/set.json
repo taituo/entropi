@@ -1,0 +1,338 @@
+[
+ {
+  "msg": "checkout-api pod looping again in prod crashloopbackoff",
+  "exp": "ops"
+ },
+ {
+  "msg": "payments podi heittää 502 miks se kaatuu taas oisko lokeis mitää",
+  "exp": "ops"
+ },
+ {
+  "msg": "ticket INFRA-291 got approved can we roll out that redis env var change to prod-eu cluster",
+  "exp": "ops"
+ },
+ {
+  "msg": "notification-service-v2 oomkillattu kolme kertaa viimesen tunnin aikana prodissa käyks joku tsekkaa muistit",
+  "exp": "ops"
+ },
+ {
+  "msg": "getting reports that auth is down, auth-service-7f8d68cf6b-x2k9q logs are spamming connection refused to db",
+  "exp": "ops"
+ },
+ {
+  "msg": "miksei billing-worker nouse pystyyn jää vaa pending tilaan",
+  "exp": "ops"
+ },
+ {
+  "msg": "can someone restart the ingestion-pipeline deployment in us-east it looks stuck after the helm release",
+  "exp": "ops"
+ },
+ {
+  "msg": "DEV-8823 configmuutos on hyväksytty stagingissa, voidaanko ajaa se nyt tuotannon ingressiin",
+  "exp": "ops"
+ },
+ {
+  "msg": "alert firing for search-indexer high restart count 14 restarts in 10min pod search-indexer-59d4c",
+  "exp": "ops"
+ },
+ {
+  "msg": "onks produn api-gatewayn podit hengissä ku tulee timeouttia ja liveness probe failaa",
+  "exp": "ops"
+ },
+ {
+  "msg": "tls cert on partner-api.acme.corp seems expired in prod, ingress is returning default backend 404",
+  "exp": "ops"
+ },
+ {
+  "msg": "orders-db replica viive kasvaa ja podit droppaa yhteyksii",
+  "exp": "ops"
+ },
+ {
+  "msg": "prod-worker-node-4 is diskpressure tainted, pods are getting evicted can we drain or clean up docker overlay",
+  "exp": "ops"
+ },
+ {
+  "msg": "tilaus-api heittää jatkuvaa 500 virhettä, saisko prodin logit viimeseltä vartilta ku kuoli äsken",
+  "exp": "ops"
+ },
+ {
+  "msg": "can someone fix the nullpointer in payments service order_processor.py line 45, it crashes if metadata is empty",
+  "exp": "developer"
+ },
+ {
+  "msg": "checkout-api heittää 500 jos billingAddress puuttuu kokonaan, pitäs lisätä joku validointi siihen dtooksi tms ettei kaadu",
+  "exp": "developer"
+ },
+ {
+  "msg": "need a patch for PAY-882, the stripe webhook handler doesnt parse the new fee structure properly, branch off main pls",
+  "exp": "developer"
+ },
+ {
+  "msg": "AUTH-112 pitäs koodaa uus endpointti tohon profiilikuvan poistoon ku käyttäjät valittaa",
+  "exp": "developer"
+ },
+ {
+  "msg": "tests are broken on feat/subscription-v2 because mock factory in test_billing.go is returning outdated structs, someone needs to rewrite the fixtures and get go test ./... green",
+  "exp": "developer"
+ },
+ {
+  "msg": "hei voisko joku tehä tohon cart-serviceen sellasen muutoksen että se laskee alvit pyöristettynä vasta loppusummasta eikä per rivi ku kirjanpito vinkuu, tein jo tumpun branchin refactor/tax-rounding mut en ehi ite koodaa loppuu",
+  "exp": "developer"
+ },
+ {
+  "msg": "need to bump redis-py to 5.0 and update the connection pool params, breaking changes in the init logic",
+  "exp": "developer"
+ },
+ {
+  "msg": "orders-backendissa repositorion query pitää koodaa uusiks ku se tekee n+1 haun getOrders() metodissa",
+  "exp": "developer"
+ },
+ {
+  "msg": "inventory-sync crashes on empty sku lists, pls add check in SyncItems() and write a unit test for it",
+  "exp": "developer"
+ },
+ {
+  "msg": "CORE-404: päivitä toi jwt kirjasto uudempaan ku vanhassa on cve ja korjaa samalla breikkaavat tyypit token parserissa",
+  "exp": "developer"
+ },
+ {
+  "msg": "checkout-api discount code logic is case sensitive rn, customer typed 'SPRING20' and failed, make it lowercase before lookup in voucher_service.ts",
+  "exp": "developer"
+ },
+ {
+  "msg": "kirjota joku pikafiksi tohon notification workerin retry logiikkaan, se luuppaa ikuisesti jos sendgrid palauttaa 400",
+  "exp": "developer"
+ },
+ {
+  "msg": "write missing unit tests for the refund flow in payments-api so we can merge the pr tomorrow",
+  "exp": "developer"
+ },
+ {
+  "msg": "kuka kerkeis vääntää migraation ja entityn uudelle vat_number kentälle tohon customer modeliin? ticket on USR-901",
+  "exp": "developer"
+ },
+ {
+  "msg": "can someone check pr 412 in payments-service? tests pass need approval",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "voiks joku vilkasta tota checkout-api fix/cart-calc haaraa ois kiva saada mergeen",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "pr #891 needs a second pair of eyes, touched auth middleware so kinda sensitive",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "tsekkaisko joku tän branchin fix/PROD-1029-nullpointer näyttääks järkevältä vai pitäskö tehä toisin päin",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "opened draft pr for billing-engine refactoring branch chore/billing-cleanup-v2, not sure about the db transaction handling in invoices.go line 84, could someone sanity check the diff before i mark ready?",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "kattotko ton PR #204 auth-servicessä, pitäs saada lgtm deployta varten",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "oisko kellää aikaa katselmoida toi data-ingestin pr 55? tein uuden retry logiikan kafka kuluttajaan mut en oo 100% varma tosta backoff exponentista ettei mee jumiin",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "need signoff on branch hotfix/stripe-webhook-timeout before staging rollout",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "oisko leimaa pr 1289 checkout-api? pelkkä dependency päivitys ja pari tyyppivirhettä korjattu",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "ptal at checkout-api pull 439 just minor refactor of discount validation logic",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "vilkaskaa joku toi tiketti CORE-8821 vastaava pr payments repossa, siel ois vähä sql query optimointia",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "who has context on notification-service? need someone to review branch feat/push-templates, left comments on the redis caching logic",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "käviskö joku antaa lgtm pr 332 inventory-sync? testit vihreinä mut pitäs saada hyväksyntä ettei mee rikki mikää",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "code review needed on pr 902 user-mgmt, mostly cleanups and removed deprecated endpoints",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "can someone pull a graph comparing p99 latency between v2.14 and v2.15 on checkout-api? feels like it degraded after lunch",
+  "exp": "insight"
+ },
+ {
+  "msg": "miks payments servussa toi error rate pomppas eilen klo 16 maissa vaikka liikennettä oli vähemmän ku yleensä? onks meil siitä jotain käppyrää",
+  "exp": "insight"
+ },
+ {
+  "msg": "conversion dropped 4% since release-2024-03-12, need breakdown by browser/os if we have it",
+  "exp": "insight"
+ },
+ {
+  "msg": "auth-service muistinkäyttö trendannu ylöspäin viimeset 2 viikkoo, näyttääkö tää muistin vuodolta vai vaa normaalilta kuormalta? voisko joku vilkasta noita metricsejä tarkemmin",
+  "exp": "insight"
+ },
+ {
+  "msg": "PROD-8921 we seeing weird spike in 401s every night at 03:00 utc... correlation with batch jobs or what?",
+  "exp": "insight"
+ },
+ {
+  "msg": "onks checkoutin hylättyjen maksujen osuudessa näkynyt jotain poikkeavaa tän viikon aikana vs edellinen kuukausi? stripe vs klarna vertailu kiinnostais",
+  "exp": "insight"
+ },
+ {
+  "msg": "chart of api gateway throughput vs db connection pool exhaustion for the incident yesterday pls",
+  "exp": "insight"
+ },
+ {
+  "msg": "katotteks miks search-v2 cpu utilisation laahas eilen alas vaikka qps pysy samana",
+  "exp": "insight"
+ },
+ {
+  "msg": "weekly traffic patterns looking weird for search-indexer, looks like 20% dip on weekends started 3 wks ago, any idea why?",
+  "exp": "insight"
+ },
+ {
+  "msg": "voisko joku piirtää nopeen käppyrän tilauksen kestoista (tilaus -> toimitusvahvistus) viimeisen 3kk ajalta ticketing-systemissä",
+  "exp": "insight"
+ },
+ {
+  "msg": "avg response time went from 140ms -> 320ms on /api/v1/basket after PROD-441 got merged. is it correlated to payload size increase or db latency?",
+  "exp": "insight"
+ },
+ {
+  "msg": "mikä selittää ton piikin basket-servicen p95 latenssissa aina tasatunnein? joku croni vai?",
+  "exp": "insight"
+ },
+ {
+  "msg": "need a retention vs churn chart grouped by cohort for the new onboarding flow trial",
+  "exp": "insight"
+ },
+ {
+  "msg": "user-mgmt cpu kuormitus vs req count viimeseltä 7 päivältä, näyttääks tää teistä siltä et se skaalautuu lineaarisesti vai kyykkääkö jossain kohtaa",
+  "exp": "insight"
+ },
+ {
+  "msg": "thx guys fix for PAY-881 works in staging now, heading to lunch",
+  "exp": "none"
+ },
+ {
+  "msg": "monelta se sprint planning olikaan tänää? kalenteris lukee 14 mut joku puhu aamupäivästä",
+  "exp": "none"
+ },
+ {
+  "msg": "wait can this bot actually join our google meet or is it just text in this channel?",
+  "exp": "none"
+ },
+ {
+  "msg": "onks toimistol kahvia ku tulin just kuudennelle ja pannu oli tyhjä :D",
+  "exp": "none"
+ },
+ {
+  "msg": "do we prefer dark blue or charcoal for checkout-api swagger theme? just personal taste tbh neither looks broken",
+  "exp": "none"
+ },
+ {
+  "msg": "kiitti jeesistä ton feat/auth-refactor kans, nyt toimii vihdoin",
+  "exp": "none"
+ },
+ {
+  "msg": "afk 20min picking up kids from daycare",
+  "exp": "none"
+ },
+ {
+  "msg": "tietääks kukaan miten nää pekkaspäivät merkataan ku se uus hr softa herjaa jotain erroria",
+  "exp": "none"
+ },
+ {
+  "msg": "man its pouring rain outside good luck to anyone cycling home today haha",
+  "exp": "none"
+ },
+ {
+  "msg": "siirretäänks se payments retro huomiselle ku puolet porukasta tuntuu olevan saikulla?",
+  "exp": "none"
+ },
+ {
+  "msg": "who invited this bot to the room lol what does it even do",
+  "exp": "none"
+ },
+ {
+  "msg": "joo selvä pyy palaan tähä lounaan jälkeen",
+  "exp": "none"
+ },
+ {
+  "msg": "anyone got the new m3 pro laptop from IT yet? does docker run any cooler or still sound like a jet engine",
+  "exp": "none"
+ },
+ {
+  "msg": "huomenta kaikille, maanantai tuntuu tänää kyl extra raskaalta...",
+  "exp": "none"
+ },
+ {
+  "msg": "checkout-api heittää 500 tuotannossa solkenaan tsekkaa lokit ja sit varmaa pitää koodaa nopee hotfixi",
+  "exp": "ops"
+ },
+ {
+  "msg": "need a quick patch on branch fix/cart-total for CART-331 negative sum calculation and then push for code review",
+  "exp": "developer"
+ },
+ {
+  "msg": "miks konversio tippu 12% sunnuntaina checkoutissa tarviis datasta graafit ja selityksen ja sit dev fiksaamaan jos joku rikki",
+  "exp": "insight"
+ },
+ {
+  "msg": "search-service pods in crashloopbackoff right now see why it died so dev can patch the failure",
+  "exp": "ops"
+ },
+ {
+  "msg": "pr 419 ois valmis katselmoitavaks ja hyväksynnän jälkeen ops vois ajaa uuden configin stageen",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "weird retention drop on android v1.4 since wednesday need churn charts and breakdown then backend needs to patch api if broken",
+  "exp": "insight"
+ },
+ {
+  "msg": "tein ton token refresh bugin korjauksen branchiin fix/token-null koodaa siihen viel testit ja laita sit arvioitavaks pr",
+  "exp": "developer"
+ },
+ {
+  "msg": "memory usage climbing fast on inventory-sync-7b89f check pod metrics and heap dump so dev team can fix the leak",
+  "exp": "ops"
+ },
+ {
+  "msg": "orders-db ihan jumissa ja cpu 99% tutki mitkä kyselyt kuristaa ja sit deville tiketiks et refaktoroi",
+  "exp": "ops"
+ },
+ {
+  "msg": "can someone review pr #1204 for the stripe retry logic first and then ops can rollout the env var updates",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "maksutapahtumien volyymit heittelee oudosti eiliseltä tee nopee analyysi anomalioista ja sit koodimuutosta jos feilaa",
+  "exp": "insight"
+ },
+ {
+  "msg": "fix the race condition on branch worker-deadlock for ticket PAY-882 and submit it for review",
+  "exp": "developer"
+ },
+ {
+  "msg": "vilkase toi branch feature/pay-v3 läpi ja jos ok nii ops voi flipata feature flagin päälle prodissa",
+  "exp": "reviewer"
+ },
+ {
+  "msg": "ingress-nginx sylkee 504 gateway timeouttia tsekkaa upstream podien tilanne ja sit devin pitää viilata timeoutteja koodista",
+  "exp": "ops"
+ }
+]

@@ -90,7 +90,7 @@ test("the package: it builds, every exports target exists and runs under plain N
 		assert.deepEqual(names["./core"], core);
 		assert.deepEqual(names["."], [...core, "VERSION", "createEntropi", "seedRealm"].sort());
 		assert.deepEqual(names["./http"], ["createApp"]);
-		assert.deepEqual(names["./batteries"], ["FakeWorld", "KubeSandbox", "OptChat", "PiRuntime", "PodmanSandbox", "SandboxManager", "ScriptedAgents", "buildInference", "configFromEnv", "inCluster", "inferenceFromEnv", "k8sExtension", "openMemoryDb", "sandboxFromEnv"]);
+		assert.deepEqual(names["./batteries"], ["DEFAULT_CLARIFIER_MODEL", "DEFAULT_CLASSIFIER_MODEL", "DEFAULT_THRESHOLD", "FakeClarifier", "FakeClassifier", "FakeWorld", "FileFeedback", "FrontDesk", "KubeSandbox", "MemoryFeedback", "OpenRouterClarifier", "OpenRouterClassifier", "OptChat", "PiRuntime", "PodmanSandbox", "ROUTER_AGENTS", "RouterModelError", "SandboxManager", "ScriptedAgents", "buildInference", "clarifierSystemPrompt", "classifierSystemPrompt", "configFromEnv", "confusionMatrix", "fakeScores", "formatConfusion", "formatNotice", "inCluster", "inferenceFromEnv", "isMulti", "isSmallTalk", "k8sExtension", "lacksContext", "openMemoryDb", "parseCorrection", "percentile", "portClassify", "runSimulation", "sandboxFromEnv"]);
 		const main: any = await import(pathToFileURL(join(OUT, "index.js")).href);
 		assert.equal(main.VERSION, pkg.version, "VERSION is the package's version");
 		assert.deepEqual([...main.EVENT_TYPES], [...EVENT_TYPES]);
