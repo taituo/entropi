@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { life, tmp, done } from "./support/life.ts";
 import { join } from "node:path";
 import { openDb } from "../src/core/db.ts";
 import { Core } from "../src/core/core.ts";
@@ -12,20 +10,6 @@ import { Core } from "../src/core/core.ts";
  * makes it SIGKILL itself at one exact moment; the next process opens the same files and must converge on the same
  * result as if nothing had happened, with no duplicated message, card, work item, Pi answer or conversation.
  */
-function life(dir: string, action: string, arg = "", env: Record<string, string> = {}): Promise<{ signal: string | null; summary?: any; err: string }> {
-	return new Promise((resolve) => {
-		const p = spawn(process.execPath, ["test/crash/child.ts", dir, action, arg], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
-		let out = "", err = "";
-		p.stdout.on("data", (d) => (out += d));
-		p.stderr.on("data", (d) => (err += d));
-		p.on("close", (_code, signal) => {
-			const line = out.split("\n").find((l) => l.startsWith("SUMMARY "));
-			resolve({ signal, summary: line ? JSON.parse(line.slice(8)) : undefined, err });
-		});
-	});
-}
-const tmp = () => mkdtempSync(join(tmpdir(), "entropi-crash-"));
-const done = (s: any) => s.agentMessages.filter((m: any) => m.status === "done");
 
 test("sanity: without a crash the loop completes once", async () => {
 	const dir = tmp();

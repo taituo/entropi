@@ -7,12 +7,16 @@ import { Binding } from "../../src/adapters/pi/binding.ts";
 
 const [dir, action, arg] = process.argv.slice(2);
 const storage = await openNodeSqliteStorage(join(dir, "pi.sqlite"));
-const w = await makeWorld({ dbPath: join(dir, "core.sqlite"), storage, real: process.env.LIVE === "1", sandboxDir: process.env.SBX_DIR });
+const w = await makeWorld({ dbPath: join(dir, "core.sqlite"), storage, real: process.env.LIVE === "1", sandboxDir: process.env.SBX_DIR, runtime: process.env.KEEP ? { keepRecentTokens: Number(process.env.KEEP) } : undefined });
 
 if (action === "post") {
-	w.core.postMessage("main", "incidents", "human:anna", { text: arg, dispatchTo: [process.env.AGENT ?? "agent:ops"] });
+	for (const text of arg.split("|")) w.core.postMessage("main", process.env.SPACE ?? "incidents", "human:anna", { text, dispatchTo: [process.env.AGENT ?? "agent:ops"] });
 }
 await w.start();
+if (action === "compact") {
+	await new Promise((r) => setTimeout(r, 300));
+	await w.runtime.compact({ realmId: "main", spaceId: "incidents", agentId: "agent:ops", by: "human:anna" });
+}
 if (action === "decide") {
 	const d = w.core.openDecisions("main")[0];
 	if (d) w.core.decide("main", d.id, "human:anna", arg || "approve", "ok");
@@ -37,6 +41,8 @@ if (action === "decide") {
 const summary: any = { agentMessages: [], decisions: 0, cards: 0, works: 0, outbox: [], piConversations: 0, piAssistantEntries: 0, submissionsPerRequest: {} };
 const msgs = w.core.listMessages("main", "incidents", "human:anna", 500);
 summary.agentMessages = msgs.filter((m) => m.kind === "agent").map((m) => ({ status: m.status, text: m.text }));
+summary.agentAuthors = msgs.filter((m) => m.kind === "agent").map((m) => m.authorId);
+summary.compactions = 0;
 summary.cards = msgs.filter((m) => m.kind === "decision").length;
 summary.decisions = (w.core.db.prepare("SELECT COUNT(*) n FROM decisions").get() as any).n;
 summary.works = (w.core.db.prepare("SELECT COUNT(*) n FROM work").get() as any).n;
@@ -50,6 +56,7 @@ do {
 		let ec: any;
 		do {
 			const ep = await storage.scanEntries({ conversationId: c.id }, 100, ec, ctx);
+			summary.compactions += ep.items.filter((e) => e.kind === "pi.compaction").length;
 			summary.piAssistantEntries += ep.items.filter((e) => e.kind === "pi.assistant" && !["aborted", "error"].includes((e as any).model?.[0]?.stopReason)).length;
 			summary.piFailedAttempts = (summary.piFailedAttempts ?? 0) + ep.items.filter((e) => e.kind === "pi.assistant" && ["aborted", "error"].includes((e as any).model?.[0]?.stopReason)).length;
 			ec = ep.next;

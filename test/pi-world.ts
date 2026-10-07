@@ -42,7 +42,7 @@ export function makeGate() {
 }
 
 export function scriptedModel(gate = makeGate()) {
-	const faux = fauxProvider({ provider: "faux", models: [{ id: "scripted", input: ["text"] }] } as any);
+	const faux = fauxProvider({ provider: "faux", models: [{ id: "scripted", input: ["text"] }], ...(process.env.SLOW_STREAM ? { tokensPerSecond: Number(process.env.SLOW_STREAM) } : {}) } as any);
 	const step = async (ctx: any, options?: any) => {
 		faux.appendResponses([step]); // a pure function of the transcript: always ready for the next call
 		const text = userText(ctx);

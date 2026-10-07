@@ -73,6 +73,7 @@ export function entropiExtension(host: ToolHost) {
 				if (!to) throw new Error(`no agent "${args.agent}" in this space. Present: ${space.agentIds.map(handleOf).join(", ")}`);
 				const run = await host.currentRun(api.conversationId);
 				const r = core.delegate(loc.realmId, { spaceId: loc.spaceId, from: loc.agentId, to, request: args.request, requestId: `ask:${api.taskId}`, depth: run?.depth ?? 0, runId: run?.runId });
+				failpoint("delegate:after-core"); // test-only: the hand-over exists in the core, the tool has not returned yet
 				return text(`${r.created ? "Asked" : "Already asked"} @${handle}. Their answer will appear in the space.`);
 			} catch (e) {
 				return fail(e);
@@ -151,6 +152,7 @@ export function entropiExtension(host: ToolHost) {
 			// recent messages verbatim, older ones ever coarser, every line zoomable.
 			hook(CompactionTask, {
 				beforeCompact: (c: any, api: any) => {
+					failpoint("compact:hook");
 					const thread = String(api.conversationId);
 					const upTo = host.memory.lastLeafBefore(thread, Number(c.firstKept));
 					if (upTo < 3) return undefined; // too little recorded history: let Pi summarise as usual
