@@ -19,7 +19,7 @@ test("event types: the list is the stable public vocabulary; this snapshot chang
 		"decision.requested", "decision.decided", "decision.cancelled", "decision.expired", "space.created", "space.archived", "space.reopened",
 		"message.posted", "message.updated", "message.completed", "delegation.requested", "attention.raised", "attention.resolved",
 	]);
-	assert.deepEqual([...BUNDLED_EVENT_TYPES], ["agent.stopped", "agent.compacted", "sandbox.exec", "sandbox.stopped", "k8s.apply"]);
+	assert.deepEqual([...BUNDLED_EVENT_TYPES], ["agent.stopped", "agent.compacted", "sandbox.exec", "sandbox.stopped", "k8s.apply", "memory.noted"]);
 	assert.equal(new Set(EVENT_TYPES).size, EVENT_TYPES.length, "no duplicates");
 	for (const t of EVENT_TYPES) assert.match(t, /^[a-z][a-z0-9]*\.[a-z]+$/);
 });

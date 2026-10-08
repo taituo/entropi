@@ -16,7 +16,7 @@ export const CORE_EVENT_TYPES = [
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
 
 /** Facts the bundled adapters and the HTTP layer put on the record through `core.record`. An integration may record its own types the same way (namespace them: "myapp.thing"). */
-export const BUNDLED_EVENT_TYPES = ["agent.stopped", "agent.compacted", "sandbox.exec", "sandbox.stopped", "k8s.apply"] as const;
+export const BUNDLED_EVENT_TYPES = ["agent.stopped", "agent.compacted", "sandbox.exec", "sandbox.stopped", "k8s.apply", "memory.noted"] as const;
 export type BundledEventType = (typeof BUNDLED_EVENT_TYPES)[number];
 
 export const EVENT_TYPES = [...CORE_EVENT_TYPES, ...BUNDLED_EVENT_TYPES] as const;

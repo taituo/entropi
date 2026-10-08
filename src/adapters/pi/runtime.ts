@@ -7,6 +7,7 @@ import type { Core } from "../../core/core.ts";
 import type { AgentControl, AgentDispatcher, EntropiSource } from "../../core/ports.ts";
 import { OptChat, openMemoryDb, SUMMARY_SYSTEM } from "../../memory/optchat.ts";
 import { TreeBuilder } from "../../memory/builder.ts";
+import { Notes, openNotesDb } from "../../memory/notes.ts";
 import type { DecisionRequest, Id, Message } from "../../core/types.ts";
 import { Binding, bindingKey } from "./binding.ts";
 import type { Inference, ModelRef } from "./inference.ts";
@@ -36,6 +37,8 @@ export type PiRuntimeOptions = {
 	/** Pi's execution environment for a conversation (what the coding tools read, write and run in). None: those tools fail with an ordinary error. */
 	env?: (conversationId: unknown) => ExecutionEnv | undefined;
 	memory?: OptChat;
+	/** Agent notes. Primary data (not rebuilt from anything), so give it a file; without one, notes live only as long as the process. */
+	notes?: Notes;
 	viewBytes?: number;
 	keepRecentTokens?: number;
 	/** "provider/model" used to write OptChat summaries; extractive summaries without it. */
@@ -57,6 +60,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 	readonly core: Core;
 	readonly storage: Storage;
 	readonly memory: OptChat;
+	readonly notes: Notes;
 	readonly builder: TreeBuilder;
 	harness!: Harness;
 	private opts: PiRuntimeOptions;
@@ -76,6 +80,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 		this.core = o.core;
 		this.storage = o.storage;
 		this.memory = o.memory ?? new OptChat(openMemoryDb(":memory:")); // a derivative: without a file it is simply rebuilt from the transcripts
+		this.notes = o.notes ?? new Notes(openNotesDb(":memory:"));
 		this.builder = new TreeBuilder(this.memory);
 		this.builder.log = (m) => console.warn(`[memtree] ${m}`);
 	}
@@ -85,7 +90,7 @@ export class PiRuntime implements AgentDispatcher, AgentControl {
 	async start() {
 		const registry = createRegistry();
 		const host = {
-			core: this.core, memory: this.memory, viewBytes: this.opts.viewBytes ?? 6000,
+			core: this.core, memory: this.memory, notes: this.notes, viewBytes: this.opts.viewBytes ?? 6000,
 			locate: (id: unknown) => this.locs.get(String(id)),
 			currentRun: (id: unknown) => this.currentRun(String(id)),
 			consultModel: (id: unknown) => { const loc = this.locs.get(String(id)); return this.opts.inference.summarizer() ?? (loc ? this.modelFor(loc) : undefined); },

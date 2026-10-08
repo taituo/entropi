@@ -21,6 +21,7 @@ import { sandboxEnvResolver } from "./adapters/sandbox/env.ts";
 import { createApp, type App } from "./http/app.ts";
 import { createUploads } from "./http/uploads.ts";
 import { OptChat, openMemoryDb } from "./memory/optchat.ts";
+import { Notes, openNotesDb } from "./memory/notes.ts";
 import { DispatchPump } from "./runtime/pump.ts";
 import { bridgeSource } from "./runtime/sources.ts";
 import { seedRealm, type RealmSeed } from "./seed.ts";
@@ -28,7 +29,7 @@ import { seedRealm, type RealmSeed } from "./seed.ts";
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 
 /** What Entropi hands a custom agent runtime so it can speak only through the core. */
-export type DispatcherContext = { core: Core; realmId: Id; dataDir: string; memory: OptChat; /** Push a streaming update of an agent message to connected clients (never logged). */ live(m: Message): void };
+export type DispatcherContext = { core: Core; realmId: Id; dataDir: string; memory: OptChat; notes: Notes; /** Push a streaming update of an agent message to connected clients (never logged). */ live(m: Message): void };
 /** A bring-your-own agent runtime: wakes agents (required) and offers whichever of stop/compact/memtree/usage it has. */
 export type Dispatcher = AgentDispatcher & AgentControl & { start?(): Promise<void>; close?(): Promise<void> };
 /** An external source, optionally with what its state changes mean (policy is yours; Entropi only caches observed state on linked refs). */
@@ -137,6 +138,8 @@ export async function createEntropi(o: EntropiOptions): Promise<Entropi> {
 	}
 
 	const memory = new OptChat(openMemoryDb(join(o.dataDir, "memory.sqlite")));
+	// Notes are primary data, not a derivative of a transcript like OptChat: a file of their own.
+	const notes = new Notes(openNotesDb(join(o.dataDir, "notes.sqlite")));
 	// Experimental front desk: built only when armed (option + flag), otherwise absent entirely.
 	const router = o.router && o.router.enabled !== false && (o.router.enabled === true || isRouterEnabled())
 		? new FrontDesk({ core, realmId: o.realm.id, spaceId: o.router.spaceId, classifier: o.router.classifier, clarifier: o.router.clarifier, threshold: o.router.threshold })
@@ -145,7 +148,7 @@ export async function createEntropi(o: EntropiOptions): Promise<Entropi> {
 	if (o.pi) {
 		const p = o.pi;
 		runtime = new PiRuntime({
-			core, memory, live, storage: await openNodeSqliteStorage(join(o.dataDir, "pi.sqlite")), inference: hasModels(p.inference) ? p.inference : buildInference(p.inference),
+			core, memory, notes, live, storage: await openNodeSqliteStorage(join(o.dataDir, "pi.sqlite")), inference: hasModels(p.inference) ? p.inference : buildInference(p.inference),
 			images: createUploads(join(o.dataDir, "uploads")), extensions: p.extensions, sources: (id) => sources.get(id),
 			summarizerModel: p.summarizerModel, viewBytes: p.viewBytes, keepRecentTokens: p.keepRecentTokens, settings: p.settings,
 			env: sandboxes ? sandboxEnvResolver({ core, manager: sandboxes, locate: (id) => runtime?.locate(id) }) : undefined,
@@ -153,7 +156,7 @@ export async function createEntropi(o: EntropiOptions): Promise<Entropi> {
 		await runtime.start();
 		control = runtime;
 	} else if (o.dispatcher) {
-		control = await o.dispatcher({ core, realmId: o.realm.id, dataDir: o.dataDir, memory, live });
+		control = await o.dispatcher({ core, realmId: o.realm.id, dataDir: o.dataDir, memory, notes, live });
 		await control.start?.();
 	}
 	const pump = control ? new DispatchPump(core, control) : undefined;

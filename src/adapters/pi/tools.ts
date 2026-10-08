@@ -1,15 +1,17 @@
 import { Type } from "@earendil-works/pi-ai";
-import { AssistantEntry, CompactionTask, configure, defineExtension, defineTool, hook } from "@earendil-works/pi-durable";
+import { AssistantEntry, CompactionTask, configure, defineExtension, defineTool, hook, section } from "@earendil-works/pi-durable";
 import { handleOf } from "../../core/core.ts";
 import { failpoint } from "../../runtime/failpoint.ts";
 import type { Core } from "../../core/core.ts";
 import type { OptChat } from "../../memory/optchat.ts";
+import type { Notes } from "../../memory/notes.ts";
 import type { DecisionRequest, Id } from "../../core/types.ts";
 
 /** What the agent-facing tools need from the runtime, as an interface so tools stay testable and the runtime stays swappable. */
 export interface ToolHost {
 	core: Core;
 	memory: OptChat;
+	notes: Notes;
 	viewBytes: number;
 	locate(conversationId: unknown): { realmId: Id; spaceId: Id; agentId: Id } | undefined;
 	/** The run in progress in this conversation (read from Pi's placed submission, so it is right even with queued follow-ups). */
@@ -144,9 +146,52 @@ export function entropiExtension(host: ToolHost) {
 		},
 	});
 
+	const memoNote = defineTool({
+		name: "memo_note",
+		description: "Save a short note (up to 280 characters) that survives across spaces, runs and model changes: decisions, outcomes, what failed, preferences. scope \"agent\" (default) follows you into every space; \"space\" keeps it in this one. In a private chat a note always stays in that chat.",
+		parameters: Type.Object({ text: Type.String({ description: "The fact to remember, self-contained" }), scope: Type.Optional(Type.Union([Type.Literal("agent"), Type.Literal("space")])) }),
+		replay: "safe",
+		execute: async (args, api) => {
+			try {
+				const loc = host.locate(api.conversationId);
+				if (!loc) throw new Error("this conversation is not attached to a space");
+				const space = core.getSpace(loc.realmId, loc.spaceId);
+				if (!space) throw new Error("space not found");
+				const { note, created } = host.notes.save({ realmId: loc.realmId, agentId: loc.agentId, space, scope: args.scope, text: args.text, source: `agent:${loc.agentId}`, requestId: `note:${api.taskId}` });
+				if (created) core.record(loc.realmId, loc.agentId, "memory.noted", "space", loc.spaceId, { noteId: note.id, scope: note.scope });
+				return text(`${created ? "Saved" : "Already saved"} note #${note.id} [${note.scope === "agent" ? "all spaces" : note.scope}].`);
+			} catch (e) {
+				return fail(e);
+			}
+		},
+	});
+
+	const memoRecall = defineTool({
+		name: "memo_recall",
+		description: "Search your saved notes (agent-wide ones and this space's). Every word of the query must appear; no query lists the newest.",
+		parameters: Type.Object({ query: Type.Optional(Type.String()), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 30 })) }),
+		replay: "safe",
+		execute: async (args, api) => {
+			try {
+				const loc = host.locate(api.conversationId);
+				if (!loc) throw new Error("this conversation is not attached to a space");
+				const found = host.notes.recall(loc.realmId, loc.agentId, loc.spaceId, args.query, Math.floor(args.limit ?? 10));
+				return text(found.length ? found.map((n) => `#${n.id} ${new Date(n.createdAt).toISOString().slice(0, 10)} [${n.scope === "agent" ? "all spaces" : n.scope}] ${n.text}`).join("\n") : "no matching notes");
+			} catch (e) {
+				return fail(e);
+			}
+		},
+	});
+
 	const extension: ReturnType<typeof defineExtension> = defineExtension({
 		name: "entropi",
-		tools: [askAgent, requestApproval, memoryZoom, consult],
+		tools: [askAgent, requestApproval, memoryZoom, consult, memoNote, memoRecall],
+		sections: [
+			section("memory", (input: any) => {
+				const loc = host.locate(input.conversationId);
+				return loc ? host.notes.section(loc.realmId, loc.agentId, loc.spaceId) : undefined;
+			}, { tag: false }),
+		] as any,
 		hooks: [
 			// When Pi compacts the context, replace its linear summary with the OptChat view of everything before the kept tail:
 			// recent messages verbatim, older ones ever coarser, every line zoomable.
